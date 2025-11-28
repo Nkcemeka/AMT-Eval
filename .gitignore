@@ -1,0 +1,9 @@
+MIDI2ScoreTransformer
+MV2H
+Transkun
+data
+venv
+MIDI2ScoreTF.ckpt
+metrics_*.xlsx
+__pycache__
+.vscode

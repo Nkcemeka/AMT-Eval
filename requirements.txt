@@ -1,0 +1,18 @@
+goblib>=1.3.1
+librosa==0.11.0
+pretty_midi
+tokenizers>=0.13.3
+numba>=0.53.1
+transformers>=4.29.2
+beautifulsoup4
+moduleconf
+sox
+mir_eval
+soxr
+pytorch-lightning
+pyxl
+transformers==4.37.2
+muster @ git+https://github.com/TimFelixBeyer/amtevaluation.github.io
+music21 @ git+https://github.com/TimFelixBeyer/music21@0ed70bb
+score_transformer @ git+https://github.com/TimFelixBeyer/ScoreTransformer@934a228
+snap2midi @ git+https://github.com/Nkcemeka/Snap2MIDI.git
