@@ -11,6 +11,49 @@ from externals.MIDI2ScoreTransformer.midi2scoretransformer.utils import infer
 from externals.MIDI2ScoreTransformer.midi2scoretransformer.tokenizer import MultistreamTokenizer
 from externals.MIDI2ScoreTransformer.midi2scoretransformer.models.roformer import Roformer
 from externals.MIDI2ScoreTransformer.midi2scoretransformer.score_utils import postprocess_score
+from externals.PM2S.pm2s import CRNNJointPM2S
+import subprocess
+from pathlib import Path
+import os
+
+def nakamura_inference(perf_midi_path: str, score_midi_path: str, data_type: str="pop") -> None:
+    """ 
+        Perform inference with Nakamura score model.
+        To avoid weird behaviour, pass absolute paths.
+
+        Args:
+            perf_midi_path (str): Path to performance midi file
+            score_midi_path (str): Path to where to store the score (pass an absolute path)
+            data_type (str): Pop/classical
+    """
+    # We do this to get rid of the ".mid" extension
+    parent_perf, parent_stem = Path(perf_midi_path).parent, Path(perf_midi_path).stem
+    parent_score, parent_score_stem = Path(score_midi_path).parent, Path(score_midi_path).stem
+
+    perf_midi_path = parent_perf / parent_stem
+    score_midi_path = parent_score / parent_score_stem
+    cmd = ["bash", "./PerformanceMIDIToQuantizedMIDI_NL.sh", f"{perf_midi_path}", \
+           f"{score_midi_path}", f"{data_type}"]
+    subprocess.run(cmd, cwd="./externals/Nakamura/RQ")
+
+def pm2s_inference(perfm_midi_path: str, score_midi_path: str):
+    pm2s_processor = CRNNJointPM2S(
+    beat_pps_args = {
+        'prob_thresh': 0.5,
+        'penalty': 1.0,
+        'merge_downbeats': False,
+        'method': 'dp',
+    },
+    ticks_per_beat = 480,
+    notes_per_beat = [1, 6, 8],
+    )
+
+    # get the end time of the MIDI file
+    temp = pretty_midi.PrettyMIDI(perfm_midi_path)
+    end_time = temp.get_end_time()
+
+    # Convert and save the generated score midi
+    pm2s_processor.convert(perfm_midi_path, score_midi_path, start_time=0, end_time=end_time)
 
 def beyer_midi_xml(midi_file: str, output_path: str) -> None:
     print("Starting inference...")
@@ -522,3 +565,5 @@ def get_scores_trans(pred_midi, gt_midi, extend_flag=True):
     p, r, f, _ = prf(gt_ints, gt_pitches, pred_ints, pred_pitches, offset_ratio=None)
     p_off, r_off, f_off, _ = prf(gt_ints, gt_pitches, pred_ints, pred_pitches)
     return f, f_off
+
+

@@ -24,6 +24,13 @@ def get_xml_score(score: m21.stream.Score, measure_nums: list, key_sig: list, ti
         --------
             new_score (m21.stream.Score): Returns the new score
     """
+    # We might run into problems because of pickups
+    first_measure = score.parts[0].getElementsByClass(m21.stream.Measure).first()
+    has_pickup = (first_measure is not None) and (first_measure.number == 0)
+    if has_pickup:
+        print("Warning! Piece has pickup. Adjusting Measure Numbers....")
+        measure_nums = [measure_nums[0]-1, measure_nums[-1]-1]
+
     # load the xml file with music21
     parts = list(score.parts)
     new_score = m21.stream.Score()

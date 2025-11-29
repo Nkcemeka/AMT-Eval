@@ -153,6 +153,43 @@ def xml_to_midi(xml_path: str, out_path: str) -> str:
 
     return out_path
 
+# Convert MIDI to MusicXML
+def midi_to_xml(midi_path: str, out_path: str) -> str:
+    """
+        Converts MIDI to MusicXML
+        and stores it!
+
+        Args:
+        ------
+            midi_path (str): path to midi file
+
+        Returns:
+        --------
+            out_path (str): Returns the path to the musicXML file
+     """
+    # Create temporary directory for the conversion
+    with tempfile.TemporaryDirectory() as tmpdir:
+        suffix = str(Path(midi_path).suffix)[1:] # we start from 1 to remove the dot
+        shutil.copy(midi_path, f"{tmpdir}/temp.{suffix}")
+
+        # Update Environment Variables
+        evs = os.environ.copy()
+        evs["DISPLAY"] = ":0"
+        evs["QT_QPA_PLATFORM"] = "offscreen"
+        evs["XDG_RUNTIME_DIR"] = tmpdir
+        evs["LD_LIBRARY_PATH"] = LD_PATH + evs.get("LD_LIBRARY_PATH", "")
+
+        # perform conversion in a new environment
+        subprocess.run(
+            [MUSESCORE_PATH, "-o", out_path, f"{tmpdir}/temp.{suffix}"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=evs
+        )
+
+    return out_path
+
+
 
 # Takes ground truth MIDI file and transcription,
 # converts it to txt and then returns the MV2H evaluation

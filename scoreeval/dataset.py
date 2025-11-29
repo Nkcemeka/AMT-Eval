@@ -34,6 +34,7 @@ class ASAPDataset:
         for test_sample in test:
             filename = test_sample[1]
             #filename = "/home/nkcemeka/Documents/Datasets/ASAP/asap-dataset/Schumann/Toccata_repeat/WangY07M.mid"
+            #filename = "/home/nkcemeka/Documents/Datasets/ASAP/asap-dataset/Beethoven/Piano_Sonatas/16-1/BuiJL02M.mid"
             print(f"Processing {filename}...")
             self.window_view(filename, num_measures=num_measures)
             #exit(1)
@@ -369,7 +370,7 @@ class ASAPDataset:
                 continue
                 
             mhashmap[f'm{i+1}'] = {} # m(db) for the key where db is downbeat index
-            
+
             # measure number start
             mhashmap[f'm{i+1}']['measure_number_start'] = int(score_map[i]) + 1 # +1 to convert from 0-indexed to 1-indexed
             # measure number end
@@ -477,6 +478,7 @@ class ASAPDataset:
                 score_xml_segment.write('musicxml', fp=str(xml_score_store_path))
             except:
                 continue
+
             sf.write(str(audio_store_path), audio_segment, 16000)
             midi_segment.write(str(midi_store_path))
             midi_score_segment.write(str(midi_score_store_path))
