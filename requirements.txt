@@ -11,6 +11,8 @@ mir_eval
 soxr
 pytorch-lightning
 pyxl
+xlsxwriter
+pillow
 transformers==4.37.2
 muster @ git+https://github.com/TimFelixBeyer/amtevaluation.github.io
 music21 @ git+https://github.com/TimFelixBeyer/music21@0ed70bb

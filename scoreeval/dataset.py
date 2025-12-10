@@ -1,4 +1,3 @@
-from tqdm import tqdm
 import librosa
 import argparse
 import csv
@@ -7,10 +6,9 @@ from pathlib import Path
 import soundfile as sf
 import music21 as m21
 import pretty_midi
-import numpy as np
 import pandas as pd
-import torch
-from dataset_utils import *
+from utils import get_midi_note_events_strict, get_tempo_changes, get_ksig_changes, \
+            get_tsig_changes, get_xml_score, remove_broken_ties
 
 class ASAPDataset:
     """
@@ -18,7 +16,7 @@ class ASAPDataset:
         ASAP Dataset structure.
     """
     def __init__(self, asap_path: str="/home/nkcemeka/Documents/Datasets/ASAP",
-                 num_measures=2) -> None:
+                 num_measures=2, store_dir: str="./data", test_split: str="maestro") -> None:
         """
             Instantiate Dataset class!
 
@@ -26,18 +24,18 @@ class ASAPDataset:
             -----
                 asap_path (str): Base path to asap dataset
                 num_measures (int): Number of measures to extract
+                store_dir (str): Directory to store data
+                test_split (str): Use "maestro" or "beyer's" test split. Default is MAESTRO.
         """
         self.asap_path = asap_path
         self.asap_annots = json.load(open(Path(self.asap_path) / "asap-dataset/asap_annotations.json"))
+        self.ts = test_split
         _, _, test = self.get_train_val_test_asap()
 
         for test_sample in test:
             filename = test_sample[1]
-            #filename = "/home/nkcemeka/Documents/Datasets/ASAP/asap-dataset/Schumann/Toccata_repeat/WangY07M.mid"
-            #filename = "/home/nkcemeka/Documents/Datasets/ASAP/asap-dataset/Beethoven/Piano_Sonatas/16-1/BuiJL02M.mid"
             print(f"Processing {filename}...")
-            self.window_view(filename, num_measures=num_measures)
-            #exit(1)
+            self.window_view(filename, num_measures=num_measures, store_dir=store_dir)
 
     def map_test_to_maestro(self, maestro_path: str, ext_midi: str,\
             ext_audio: str, maestro_csv="maestro-v2.0.0.csv") -> dict:
@@ -475,7 +473,8 @@ class ASAPDataset:
             # Save audio
             try:
                 # If the score saves to fail for some reason, then skip
-                score_xml_segment.write('musicxml', fp=str(xml_score_store_path))
+                remove_broken_ties(score_xml_segment, str(xml_score_store_path)) # This function saves the file as well
+                #score_xml_segment.write('musicxml', fp=str(xml_score_store_path), makeNotation=True)
             except:
                 continue
 
@@ -527,9 +526,14 @@ class ASAPDataset:
         #TEST_PIECE_IDS = [15, 78, 159, 172, 254, 288, 322, 374, 395, 399, 411, 418, 452, 478]
         # The ones below are gotten from maestro-v2 dataset
         # I also remove piece IDS in ignore_indices and IDs that are problematic
-        TEST_PIECE_IDS = [20, 22, 23, 30, 41, 52, 54, 55, 62, 73, 78, 83, 90, 91, 95, 98, 121, \
-                122, 129, 136, 138, 139, 141, 223, 232, 255, 324, 325, 341, 342, 343, 401, \
-                421, 443, 445, 447]
+        if self.ts == "maestro":
+            TEST_PIECE_IDS = [20, 22, 23, 30, 41, 52, 54, 55, 62, 73, 78, 83, 90, 91, 95, 98, 121, \
+                    122, 129, 136, 138, 139, 141, 223, 232, 255, 324, 325, 341, 342, 343, 401, \
+                    421, 443, 445, 447]
+        elif self.ts == "beyer":
+            TEST_PIECE_IDS = [15, 78, 159, 172, 254, 288, 322, 374, 395, 399, 411, 418, 452, 478]
+        else:
+            raise ValueError("Unknown test split. Available options are: `maestro` and `beyer`")
 
         data = pd.concat([real_data, synth_data])
 
@@ -611,13 +615,22 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Extract segments for user study")
     
     # Define arguments
-    parser.add_argument("-m", "--num_measures", help="Number of measures to extract")
+    parser.add_argument("-nm", "--num_measures", help="Number of measures to extract")
     parser.add_argument("-p", "--path", help="Path to ASAP dataset", required=False)
+    parser.add_argument("-o", "--output_dir", help="Path to directory to store segements. Default is 'data'",\
+        required=False)
+    parser.add_argument("-ts", "--test_split", help="Default is `maestro`. You can use `beyer` as well.", required=False)
 
     args = parser.parse_args()
 
-    if args.path:
-        ASAPDataset(asap_path=args.path, num_measures=int(args.num_measures))
+    if args.test_split is None:
+        test_split = "maestro"
     else:
-        ASAPDataset(num_measures=int(args.num_measures))
+        test_split = args.test_split
+
+    if args.path:
+        ASAPDataset(asap_path=args.path, num_measures=int(args.num_measures), store_dir=args.output_dir, \
+                test_split=test_split)
+    else:
+        ASAPDataset(num_measures=int(args.num_measures), store_dir=args.output_dir, test_split=test_split)
 

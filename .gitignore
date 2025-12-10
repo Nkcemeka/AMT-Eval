@@ -9,3 +9,5 @@ metrics_*.xlsx
 __pycache__
 .vscode
 Nakamura
+interesting.sh
+logfile.log
