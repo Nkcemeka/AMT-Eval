@@ -110,7 +110,7 @@ def draw_keyboard(ax, pitch_min, pitch_max):
 
 def visualize_piano_roll(score: list, output_path: str, xlabel: str='Time (seconds)', ylabel:str='', \
                          colors: str='viridis', velocity_alpha: bool=False,
-                         figsize: tuple=(16, 8), ax=None, dpi: int=300):
+                         figsize: tuple=(16, 8), ax=None, dpi: int=300, save=True):
     """
         Plot a pianoroll visualization
 
@@ -181,10 +181,12 @@ def visualize_piano_roll(score: list, output_path: str, xlabel: str='Time (secon
     if fig is not None:
         plt.tight_layout()
 
-    plt.savefig(f"{output_path}", dpi=dpi, bbox_inches="tight")
-    plt.close(fig)
+    if save:
+        plt.savefig(f"{output_path}", dpi=dpi, bbox_inches="tight")
+        plt.close(fig)
 
-def generate_piano_roll(midi: pretty_midi.PrettyMIDI, output_path: str):
+def generate_piano_roll(midi: pretty_midi.PrettyMIDI, output_path: str, \
+                        figsize: tuple=(16,8), dpi: int=300, save: bool=True):
     """ 
         Generate piano roll
 
@@ -194,7 +196,7 @@ def generate_piano_roll(midi: pretty_midi.PrettyMIDI, output_path: str):
     """
     csv = midi_to_csv(midi)
     score = csv_to_list(csv)
-    visualize_piano_roll(score, output_path)
+    visualize_piano_roll(score, output_path, figsize=figsize, dpi=dpi, save=save)
 
 
 # ====================================
@@ -311,7 +313,7 @@ def musescore_convert_img(input_path: str, output_path: str):
         # -T 10 trims the image by a margin of 10
         # -f is not ideal, but I do it because nakamura outputs can be weird after merging
         subprocess.run(
-            [MUSESCORE_PATH, "-T", "10", "-o",  f"{tmpdir}/temp.png", f"{tmpdir}/temp.{suffix}"],
+            [MUSESCORE_PATH, "-f", "-T", "10", "-o",  f"{tmpdir}/temp.png", f"{tmpdir}/temp.{suffix}"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             env=evs
@@ -534,7 +536,7 @@ def compute_mpteval(pred: str, target: str, result_type: str="harmony") -> dict 
 
     result_dict = {'melody_ioi_corr': 0, 'acc_ioi_corr': 0, \
                    'ratio_ioi_corr': 0, 'cloud_diameter_corr': 0, \
-                    'cloud_momentum_corr': 0}
+                    'cloud_momentum_corr': 0, 'tensile_strain_corr': 0}
     
     ref_perf = pt.load_performance_midi(target)
     pred_perf = pt.load_performance_midi(pred)
@@ -563,8 +565,9 @@ def compute_mpteval(pred: str, target: str, result_type: str="harmony") -> dict 
     for key in result_dict.keys():
         if np.isnan(result_dict[key]):
             # set to 0 and print warning
-            print(f"Warning: {key} is nan, setting to 0, guilty MIDI file: {target}, pred: {pred}")
-            result_dict[key] = 0.0
+            print(f"Warning: {key} is nan, skipping guilty MIDI file: {target}, pred: {pred}")
+            raise RuntimeError('Nan value obtained!')
+            #result_dict[key] = 0.0
         
     if result_type == "harmony":
         return harmony_metrics
@@ -624,21 +627,28 @@ def compareFramewise(intervalEst, intervalGT, countZero=True):
 
     return nGT,nEst, nIntersected
 
-def compute_activation_metrics(pred: str, gt: str):
+def compute_activation_metrics(pred: str|pretty_midi.PrettyMIDI, gt: str|pretty_midi.PrettyMIDI):
     """ 
         Computes the activation-level metrics. 
         Note that this does not extend pedals as is
         based on models trained without pedal extension.
 
         Args:
-            pred (str): Path to MIDI transcription
-            gt (str): Path to ground-truth MIDI file
+            pred (str | pretty_midi.PrettyMIDI): Path to MIDI transcription or pretty MIDI object
+            gt (str | pretty_midi.PrettyMIDI): Path to ground-truth MIDI file or pretty MIDI object
         
         Returns:
             out (tuple): (precision, recall, f1-score)
     """
-    gt = pretty_midi.PrettyMIDI(gt)
-    pred = pretty_midi.PrettyMIDI(pred)
+    if isinstance(gt, pretty_midi.PrettyMIDI):
+        gt = gt 
+    else:
+        gt = pretty_midi.PrettyMIDI(gt)
+
+    if isinstance(pred, pretty_midi.PrettyMIDI):
+        pred = pred 
+    else:
+        pred = pretty_midi.PrettyMIDI(pred)
 
     # get notes for ground truth midi
     gt_midi_notes = defaultdict(list)
@@ -1764,7 +1774,7 @@ def merge_score(xml_path: str, store_path: str):
     assert new_score.isWellFormedNotation(), "Stream is not well-formed."
     new_score.write("musicxml", fp=f"{store_path}", makeNotation=True)
 
-def postprocess_score(xml_path: str, store_path: str):
+def strip_tempo_markings(xml_path: str, store_path: str):
     # For scores we postprocess to hide the tempo, the audio
     # should be generated from the MIDI scores for perceptual 
     # similarity to the audio
@@ -1773,23 +1783,13 @@ def postprocess_score(xml_path: str, store_path: str):
     # Our goal is to use this function to do some postprocessing
     # For now, we are looking at hiding tempo markings
     for el in list(s.recurse().getElementsByClass(m21.tempo.MetronomeMark)):
-        new_marking = m21.tempo.MetronomeMark(numberSounding=el.number)
-        new_marking.style.hideObjectOnPrint = True
+        # new_marking = m21.tempo.MetronomeMark(numberSounding=el.number)
+        # new_marking.style.hideObjectOnPrint = True
 
         # Get site
         site = el.activeSite
         site.remove(el)
     
+    s.metadata = m21.metadata.Metadata(title='')
+    s.metadata.composer=''
     s.write("musicxml", fp=f"{store_path}")
-        
-# merge_midi_two_tracks("out.mid", "out2.mid")
-# merge_score("out_merge.musicxml", "out_merge2.musicxml")
-# postprocess_score('./data/score_examples/pred_xml/BLINOV04M_m5_musescore.musicxml', \
-#         "pp.musicxml")
-
-# nakamura_inference("/home/nkcemeka/Documents/ismir2026/scoreeval/data/midi/BLINOV04M_m29.mid", \
-#                    "/home/nkcemeka/Documents/ismir2026/scoreeval/test.mid")
-# musescore_convert("out_merge.mid", "out_merge.musicxml")
-# print(muster("test.musicxml", "/home/nkcemeka/Documents/ismir2026/scoreeval/data/xml_score/BLINOV04M_m29.musicxml"))
-#print(muster("./data/score_examples/pred_xml/BuiJL02M_m126_beyer.musicxml", "/home/nkcemeka/Documents/ismir2026/scoreeval/data/xml_score/BuiJL02M_m126.musicxml"))
-#print(muster("/home/nkcemeka/Documents/ismir2026/scoreeval/data/xml_score/BuiJL02M_m126.musicxml", "/home/nkcemeka/Documents/ismir2026/scoreeval/data/xml_score/BuiJL02M_m126.musicxml"))

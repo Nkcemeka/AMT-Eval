@@ -1,18 +1,24 @@
-goblib>=1.3.1
+joblib>=1.3.1
 librosa==0.11.0
 pretty_midi
 tokenizers>=0.13.3
 numba>=0.53.1
-transformers>=4.29.2
 beautifulsoup4
 moduleconf
 sox
 mir_eval
 soxr
 pytorch-lightning
-pyxl
+dash
+dash_bootstrap_components
+openpyxl
 xlsxwriter
 pillow
+SQLAlchemy
+bcrypt
+dash-auth
+Flask-Login
+python-dotenv
 transformers==4.37.2
 muster @ git+https://github.com/TimFelixBeyer/amtevaluation.github.io
 music21 @ git+https://github.com/TimFelixBeyer/music21@0ed70bb

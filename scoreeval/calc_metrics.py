@@ -21,7 +21,8 @@ def metrics_midi_model(data, model_type: str):
     peamt_list = []
     act_dict = {'p': [], 'r': [], 'f': []}
     note_dict = {'p': [], 'r': [], 'f': [], 'p_off': [], 'r_off': [], 'f_off': []}
-    mpteval_dict = {'cloud_diameter_corr': [], 'cloud_momentum_corr': [], 'tensile_strain_corr': []}
+    mpteval_dict = {'cloud_diameter_corr': [], 'cloud_momentum_corr': [], 'tensile_strain_corr': [], \
+                    'melody_ioi_corr': [], 'acc_ioi_corr': []}
 
     print(f"Calclating results for {model_type}....\n")
     for j, item in tqdm(enumerate(data), total=len(data)):
@@ -29,7 +30,12 @@ def metrics_midi_model(data, model_type: str):
         # Get necessary info
         gt_midi = item["midi"]
         filename = str(Path(gt_midi).stem)
-        pred_midi = item[model_type]
+
+        # model_type might not be for this element so we have to check
+        if model_type in item:
+            pred_midi = item[model_type]
+        else:
+            continue
 
         # init row
         row = {
@@ -37,10 +43,14 @@ def metrics_midi_model(data, model_type: str):
         }
 
         # Get metrics
-        note_scores = get_note_scores(pred_midi, gt_midi)
-        peamt = peamt_score(pred_midi, gt_midi)
-        act_scores = compute_activation_metrics(pred_midi, gt_midi)
-        mpteval_scores = compute_mpteval(pred_midi, gt_midi)
+        try:
+            note_scores = get_note_scores(pred_midi, gt_midi)
+            peamt = peamt_score(pred_midi, gt_midi)
+            act_scores = compute_activation_metrics(pred_midi, gt_midi)
+            mpteval_scores = compute_mpteval(pred_midi, gt_midi, result_type="all")
+        except:
+            # skip excerpts that generate errors
+            continue
 
         # store info
         peamt_list.append(peamt)
@@ -54,8 +64,10 @@ def metrics_midi_model(data, model_type: str):
             row[("Act-Level Metrics", key)] = round(act_scores[idx].item(), 4)
 
         for idx, key in enumerate(mpteval_dict.keys()):
-            mpteval_dict[key].append(mpteval_scores[0][key])
-            row[("MPT Metrics", key)] = round(mpteval_scores[0][key], 4)
+            mpteval_dict[key].append(mpteval_scores[key])
+            row[("MPT Metrics", key)] = round(mpteval_scores[key], 4)
+            # mpteval_dict[key].append(mpteval_scores[0][key])
+            # row[("MPT Metrics", key)] = round(mpteval_scores[0][key], 4)
         
         rows.append(row)
     
@@ -104,13 +116,14 @@ def metrics_midi(base_path: str, output_path: str):
 
     # get model types
     model_types = []
-    for k in list(examples_json[0].keys()):
-        if '_pmidi' in k:
-            model_types.append(k)
+    for each in examples_json:
+        for k in list(each.keys()):
+            if '_pmidi' in k and k not in model_types:
+                model_types.append(k)
     
     # sort the model types
     model_types = sorted(model_types)
-
+    
     for model_type in model_types:
         metrics = metrics_midi_model(examples_json, model_type)
         results.append((metrics, model_type))

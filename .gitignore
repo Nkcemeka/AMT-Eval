@@ -9,5 +9,13 @@ metrics_*.xlsx
 __pycache__
 .vscode
 Nakamura
-interesting.sh
+examples.sh
 logfile.log
+PEAMT
+mpteval
+ScoreRearrangement
+*.ipynb
+*.png
+assets/
+study.db
+.env
