@@ -1,7 +1,8 @@
-from dash import Dash, dcc, html
+from dash import Dash, dcc, html, ctx
 import dash_bootstrap_components as dbc
 import dash
-from dash_app.database import SessionLocal, User, load_questions, load_responses
+from dash_app.database import SessionLocal, User, load_questions, load_questions2, load_responses
+from dash.exceptions import PreventUpdate
 from flask import Flask
 from flask_login import LoginManager, logout_user, current_user
 import os
@@ -10,6 +11,7 @@ from dotenv import load_dotenv
 import random
 import json
 from pathlib import Path
+from dash_app.database import add_response, save_lq, load_lq
 
 FILE_PATH = Path(__file__).resolve().parent
 
@@ -48,7 +50,11 @@ app.layout = html.Div(
         dcc.Store(id="init-login", data=False, storage_type="session"),
         #dcc.Store(id='lq', data=-1, storage_type="session"), # tracks the last filled question
         dcc.Store(id='questions', data=[], storage_type="session"),
+        dcc.Store(id='user-id', data='', storage_type="session"),
         dcc.Store(id='order', data='', storage_type="session"),
+        dcc.Store(id="dummy", data=''),
+        dcc.Store(id='button-clicked', data=0), # tracks if next/back button was clicked on questions page
+        dcc.Store(id="current-question", data=-1, storage_type="session"),
         dcc.Location(id="url", refresh=True),
         dbc.NavbarSimple(id="navbar",
             children=[],
@@ -61,13 +67,57 @@ app.layout = html.Div(
     ]
 )
 
+app.clientside_callback(
+    """
+    function(pathname) {
+        if (pathname !== "/logout") {
+            return window.dash_clientside.no_update;
+        }
+
+        // Clear localStorage
+        Object.keys(localStorage).forEach(key => {
+            if (key.includes('_dash_persistence') || key.includes('_dash_store')) {
+                localStorage.removeItem(key);
+            }
+        });
+
+        // Clear sessionStorage
+        Object.keys(sessionStorage).forEach(key => {
+            sessionStorage.removeItem(key);
+        });
+
+        // Hard redirect AFTER cleanup
+        window.location.replace("/login");
+        return "/login";
+    }
+    """,
+    Input("url", "pathname"),
+)
+
+# Scroll to top of page when 
+# next or back button is clicked
+app.clientside_callback(
+    """
+    function(n) {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+        return null;
+    }
+    """,
+    Output("dummy", "data"),
+    Input("button-clicked", "data"),
+    prevent_initial_call=True
+)
+
 # Load questions for the current user
 @app.callback(
     Output("questions", "data"),
-    Input("questions", "data")
+    Input("questions", "data"),
 )
 def get_questions(_: list):
-    return load_questions()
+    #return load_questions()
+    if not current_user.is_authenticated:
+        raise PreventUpdate
+    return load_questions2(current_user.get_id())
 
 # Callback to handle selections
 @app.callback(
@@ -76,7 +126,7 @@ def get_questions(_: list):
     Input("init-login", "data"),
     State("user-selections", "data"),
 )
-def selection_handler(changes, _, selections):
+def selection_handler(changes, _, selections):    
     if not current_user.is_authenticated:
         return {}
     
@@ -102,6 +152,7 @@ def selection_handler(changes, _, selections):
     Input("questions", "data"),
 )
 def gen_order(questions):
+    
     if not current_user.is_authenticated:
         return ''
     num_questions = len(questions)
@@ -134,7 +185,6 @@ def gen_order(questions):
     finally:
         session.close()
 
-
 # Router callback to deal with
 # navigation issues
 @app.callback(
@@ -143,7 +193,7 @@ def gen_order(questions):
     Output("navbar", "brand"),
     Input("url", "pathname"),
     Input("init-login", "data"),
-    Input("finished", "data")
+    Input("finished", "data"),
 )
 def router(page, _, finished: bool):
     # if user is not authenticated and we are not on the signup
@@ -162,23 +212,51 @@ def router(page, _, finished: bool):
     thankyou_nav = [
         dbc.NavItem(dbc.NavLink("Logout", href="/logout")),
     ]
+
+    if page == "/signup":
+        return dash.no_update, [dbc.NavItem(html.A("Login", href="/login",\
+                        className="nav-hover", id="nav-login")),], ""
     
     if page == "/login" and current_user.is_authenticated:
         return "/", fullnav, "User Study"
     
     if page == "/logout" and current_user.is_authenticated:
         logout_user()
-        return "/login", fullnav, ""
+        return dash.no_update, fullnav, ""
+        #return "/login", fullnav, ""
     
     # If the user is authenticated
     # Check if he is done with the questions
     if finished:
         return "/thanks", thankyou_nav, "User Study"
     
-    if page == "/signup":
-        return dash.no_update, [dbc.NavItem(html.A("Login", href="/login",\
-                        className="nav-hover", id="nav-login")),], ""
     return dash.no_update, fullnav, "User Study"
+
+
+@app.callback(
+    Output("user-id","data"),
+    Input("url", "pathname"),
+)
+def get_userid(_):
+    if current_user.is_authenticated:
+        return current_user.get_id()
+    else:
+        raise PreventUpdate
+
+# # Store resposes
+# @app.callback(
+#     Input("finished", "data"), # Means the user has answered all questions and clicked submit
+#     Input("url", "pathname"),
+#     State("user-selections", "data"),
+#     State("user-id", "data")
+# )
+# def save_responses(finished, page, selections, user_id):
+#     if len(selections.keys()) == 0 or page!='/logout':
+#         raise PreventUpdate
+    
+#     current_idx = len(selections.keys()) - 1
+#     add_response(selections, user_id=user_id)
+#     save_lq(user_id, current_idx)
 
 if __name__ == '__main__':
     app.run(debug=True)

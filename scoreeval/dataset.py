@@ -7,8 +7,9 @@ import soundfile as sf
 import music21 as m21
 import pretty_midi
 import pandas as pd
-from utils import get_midi_note_events_strict, get_tempo_changes, get_ksig_changes, \
-            get_tsig_changes, get_xml_score, remove_broken_ties
+import numpy as np
+from utils import get_midi_note_events_strict, get_midi_note_events_strict2, get_tempo_changes, get_ksig_changes, \
+            get_tsig_changes, get_xml_score, remove_broken_ties, midi2audio
 
 class ASAPDataset:
     """
@@ -32,10 +33,15 @@ class ASAPDataset:
         self.ts = test_split
         _, _, test = self.get_train_val_test_asap()
 
+        main_rhythm_dict = {}
         for test_sample in test:
             filename = test_sample[1]
             print(f"Processing {filename}...")
-            self.window_view(filename, num_measures=num_measures, store_dir=store_dir)
+            main_rhythm_dict.update(self.window_view(filename, num_measures=num_measures, store_dir=store_dir))
+        
+        # save the tempos dict to a json file
+        with open(Path(store_dir) / "rhythm_metadata.json", "w") as f:
+            json.dump(main_rhythm_dict, f)
 
     def map_test_to_maestro(self, maestro_path: str, ext_midi: str,\
             ext_audio: str, maestro_csv="maestro-v2.0.0.csv") -> dict:
@@ -403,10 +409,11 @@ class ASAPDataset:
         assert Path(midi_score_file).exists(), f"MIDI score file {midi_score_file} does not exist"
         assert Path(xml_score_file).exists(), f"XML score file {xml_score_file} does not exist"
 
-        audio = librosa.load(audio_file, sr=16000)[0]
+        #audio = librosa.load(audio_file, sr=16000)[0]
         midi = pretty_midi.PrettyMIDI(str(midi_file))
         midi_score = pretty_midi.PrettyMIDI(str(midi_score_file))
         score_xml = m21.converter.parse(str(xml_score_file))
+        rhythm_dict = {} # (audio_id[Key], (tempo, ts)); value is tempo and time signature
 
         for key in mhashmap.keys():
             measure_num_start = mhashmap[key]['measure_number_start']
@@ -419,18 +426,15 @@ class ASAPDataset:
             send = mhashmap[key]['send']
             ks = mhashmap[key]['key_signature']
             ts = mhashmap[key]['time_signature']
-
-            # Get audio segment
-            audio_start_sample = int(round(pstart * 16000))
-            audio_end_sample = int(round(pend * 16000)) + 1
-            audio_segment = audio[audio_start_sample:audio_end_sample]
-
-            # Get MIDI segment
-            midi_segment = get_midi_note_events_strict(midi, pstart, pend)
-            midi_segment = self.gen_midi_from_notes(midi_segment)
+            try:
+                tempos = self.get_tempos(ts, pstart, pend)
+            except:
+                # if the time signature is not the same for given
+                # number of measures, skip it
+                continue
 
             # Get MIDI score segment
-            midi_score_segment = get_midi_note_events_strict(midi_score, sstart, send)
+            midi_score_segment = get_midi_note_events_strict2(midi_score, midi_score, sstart, send)
             midi_seg_tempo_changes = get_tempo_changes(midi_score, sstart, send)
             midi_seg_ts_changes = get_tsig_changes(midi_score, sstart, send)
             midi_seg_ks_changes = get_ksig_changes(midi_score, sstart, send)
@@ -461,14 +465,27 @@ class ASAPDataset:
             midi_score_segment.time_signature_changes = midi_seg_ts_changes
             midi_score_segment.key_signature_changes = midi_seg_ks_changes
 
+            # Get MIDI segment
+            #midi_segment = get_midi_note_events_strict(midi, pstart, pend)
+            midi_segment = get_midi_note_events_strict2(midi, midi_score_segment, pstart, pend)
+            midi_segment = self.gen_midi_from_notes(midi_segment)
+
+            # Get audio segment
+            audio_segment = midi2audio(midi_segment, fs=16000, \
+                sf2_path="/home/nkcemeka/Documents/snap/snap2midi/notebooks/soundfonts/MuseScore_General.sf2" )
+            # audio_start_sample = int(round(pstart * 16000))
+            # audio_end_sample = int(round(pend * 16000))
+            # audio_segment = audio[audio_start_sample:audio_end_sample]
+
             # Get XML score segment
-            score_xml_segment = get_xml_score(score_xml, measure_num_list, ks, ts)
+            score_xml_segment = get_xml_score(score_xml, measure_num_list, ks, ts, tempos)
 
             # Save the segments to files
             audio_store_path = Path(store_dir) / "audio" / f"{Path(filename).stem}_m{measure_num_start}.wav"
             midi_store_path = Path(store_dir) / "midi" / f"{Path(filename).stem}_m{measure_num_start}.mid"
             midi_score_store_path = Path(store_dir) / "midi_score" / f"{Path(filename).stem}_m{measure_num_start}.mid"
             xml_score_store_path = Path(store_dir) / "xml_score" / f"{Path(filename).stem}_m{measure_num_start}.musicxml"
+            rhythm_dict[f"{Path(filename).stem}_m{measure_num_start}"] = (tempos[0], ts[0])
 
             # Save audio
             try:
@@ -481,6 +498,23 @@ class ASAPDataset:
             sf.write(str(audio_store_path), audio_segment, 16000)
             midi_segment.write(str(midi_store_path))
             midi_score_segment.write(str(midi_score_store_path))
+        
+        return rhythm_dict
+    
+    def get_tempos(self, ts, start, end):
+        # I think the annotations give us the right number of beats
+        # for compound measures (e.g 9 is 3; 6 is 2 etc..)
+        # We assume the tempo is constant throughout the measures
+        ts_set = set([item[1] for item in ts])
+        if len(ts_set) != 1:
+            raise ValueError("Time signature should be constant around measures!")
+        
+        num_measures = len(ts) - 1
+        num_beats = ts[0][1]
+        total_beats = num_beats * num_measures
+        tempo = (60*total_beats)/(end - start)
+        tempos = [tempo]*len(ts)
+        return tempos
 
     def get_train_val_test_asap(self, opts: bool = True) -> tuple[list, list, list]:
         """ 

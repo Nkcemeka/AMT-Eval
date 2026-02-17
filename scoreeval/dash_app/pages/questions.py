@@ -1,4 +1,4 @@
-from dash import html, dcc, callback
+from dash import html, dcc, callback, ctx
 from dash.dependencies import Input, Output, State
 import dash_bootstrap_components as dbc
 from dash_app.components import audio_component, nav_btns_component,\
@@ -6,7 +6,7 @@ from dash_app.components import audio_component, nav_btns_component,\
       NUM_DIM_MIDI, NUM_DIM_SCORE, audio_trans_comp
 import dash
 import json
-from dash_app.database import add_response
+from dash_app.database import add_response, save_lq, load_lq
 from flask_login import current_user
 from dash.exceptions import PreventUpdate
 
@@ -24,7 +24,7 @@ layout = html.Div(
         dcc.Store(id='q-type', data=''),
         dcc.Store(id="dimension-status", data=False),
         dcc.Store(id='reload', data=0),
-        dcc.Store(id="current-question", data=-1, storage_type="session"),
+        # dcc.Store(id="current-question", data=-1, storage_type="session"),
         dcc.Store(id="prev-question", data=-2), # No session storage to handle reloads effectively
         
         html.Div(
@@ -44,9 +44,9 @@ layout = html.Div(
                     gen_comp,
 
                     # Question
-                    html.H5("Select which transcription you prefer in each of the following dimensions.", \
-                        style={"margin": '30px auto'}),
-                    
+                    #html.H5("Select which transcription you prefer in each of the following dimensions.", \
+                    #    style={"margin": '30px auto'}),
+                        
                     html.Div(midi_comp_layout(), style={"display": "none", "width": "100%"}, id="midi-comp"),
                     html.Div(score_comp_layout(), style={"display": "none", "width": "100%"}, id="score-comp"),
                     dbc.Modal(
@@ -90,6 +90,7 @@ def reload(reload):
     Output('current-question', 'data'),
     Output("next-btn", "children"),
     Output("finished", "data"), 
+    Output("button-clicked", "data"), # helps us reload page when question changes
     Input("next-btn", "n_clicks_timestamp"),
     Input("back-btn", "n_clicks_timestamp"),
     State("current-question", "data"),
@@ -98,15 +99,16 @@ def reload(reload):
     State("score-comp", "children"),
     State("questions", "data"),
     State("max-btn-timestamp", "data"),
+    State("button-clicked", "data"),
     State('reload', 'data'),
     prevent_initial_call=True
 )
 def go_to_next_question(n_clicks_front_ts, n_clicks_back_ts, current_idx,\
-        last_click_next, midi_comp, score_comp, questions, max_ts, reload):
+        last_click_next, midi_comp, score_comp, questions, max_ts, btn_click, reload):
     
-    if not reload and current_idx > -1:
-        # if reload is 0 and current_idx is not -1, it means page has been reloaded!!
-        raise PreventUpdate
+    # if not reload and current_idx > -1:
+    #     # if reload is 0 and current_idx is not -1, it means page has been reloaded!!
+    #     raise PreventUpdate
     
     if n_clicks_front_ts is not None and n_clicks_front_ts > last_click_next:
         last_click_next = n_clicks_front_ts
@@ -121,10 +123,29 @@ def go_to_next_question(n_clicks_front_ts, n_clicks_back_ts, current_idx,\
 
         # If back button is clicked, dim_status is True and we shouldn't be storing
         # any user input
-        return max_ts, {}, last_click_next, True, current_idx, "Next", False
+        return max_ts, {}, last_click_next, True, current_idx, "Next", False, not btn_click
+    
+    if not reload and current_idx > -1:
+        # if reload is 0 and current_idx is not -1, it means page has been reloaded!
+        # return the default state of the page
+        if current_idx == len(questions) - 1:
+            next_btn_str = "Submit"
+        else:
+            next_btn_str = "Next"
+        return max_ts, {}, last_click_next, True, current_idx, next_btn_str, False, btn_click
     
     if current_idx == -1:
-        return max_ts, {}, last_click_next, True, 0, "Next", False
+        # This means we have a fresh state, so load the last idx from db and return it
+        lq_db = load_lq(current_user.get_id())
+        print("LQ_SBBBB", lq_db)
+        if lq_db == -1:
+            lq_db = 0
+
+        if lq_db == len(questions) - 1:
+            next_btn_str = "Submit"
+        else:
+            next_btn_str = "Next"
+        return max_ts, {}, last_click_next, True, lq_db, next_btn_str, False, btn_click
     
     # Get the current question before going to the next
     # We do this to see if the user has filled all requirements
@@ -154,15 +175,28 @@ def go_to_next_question(n_clicks_front_ts, n_clicks_back_ts, current_idx,\
     if quest_type == "MIDI":
         temp_dict = {}
         for i, child in enumerate(midi_comp):
-            if i%2 != 0:
-                # It means it is an horizontal line
-                continue
+            # if i%2 != 0:
+            #     # It means it is an horizontal line
+            #     continue
 
             child = child["props"]["children"]
-            label, radio_choice = child[0]["props"]["children"][0]["props"]["children"], child[1]["props"]["value"]
-            if radio_choice is None:
+            if isinstance(child, str) or child is None:
                 continue
-            temp_dict[label] = radio_choice
+
+            if isinstance(child, list):
+                label, radio_choice = child[0]["props"]["children"][0]["props"]["children"], child[1]["props"]["value"]
+                if radio_choice is None:
+                    continue
+                temp_dict[label] = radio_choice
+            elif isinstance(child, dict):
+                # This is our likert scale section and should be a dict
+                label = child["props"]["id"]
+                radio_choice = child["props"]["value"]
+                if radio_choice is None:
+                    continue
+                temp_dict[label] = radio_choice
+            else:
+                raise ValueError("Invalid child element!")
 
         if temp_dict and len(temp_dict.keys()) == NUM_DIM_MIDI:
             selections[str(current_idx)] = temp_dict
@@ -170,14 +204,26 @@ def go_to_next_question(n_clicks_front_ts, n_clicks_back_ts, current_idx,\
     elif quest_type == "SCORE":
         temp_dict = {}
         for i, child in enumerate(score_comp):
-            if i%2 != 0:
-                # It means it is an horizontal line
-                continue
+            # if i%2 != 0:
+            #     # It means it is an horizontal line
+            #     continue
             child = child["props"]["children"]
-            label, radio_choice = child[0]["props"]["children"][0]["props"]["children"], child[1]["props"]["value"]
-            if radio_choice is None:
+            if isinstance(child, str) or child is None:
                 continue
-            temp_dict[label] = radio_choice
+            if isinstance(child, list):
+                label, radio_choice = child[0]["props"]["children"][0]["props"]["children"], child[1]["props"]["value"]
+                if radio_choice is None:
+                    continue
+                temp_dict[label] = radio_choice
+            elif isinstance(child, dict):
+                # This is our likert scale section and should be a dict
+                label = child["props"]["id"]
+                radio_choice = child["props"]["value"]
+                if radio_choice is None:
+                    continue
+                temp_dict[label] = radio_choice
+            else:
+                raise ValueError("Invalid child element!")
         
         if temp_dict and len(temp_dict.keys()) == NUM_DIM_SCORE:
             selections[str(current_idx)] = temp_dict
@@ -185,13 +231,19 @@ def go_to_next_question(n_clicks_front_ts, n_clicks_back_ts, current_idx,\
 
     if current_idx == len(questions) - 1:
         if dim_status:
-            return max_ts, selections, last_click_next, dim_status, current_idx, next_btn_str, True
+            return max_ts, selections, last_click_next, dim_status, current_idx, next_btn_str, True, not btn_click
         else:
-            return max_ts, selections, last_click_next, dim_status, current_idx, next_btn_str, False
+            return max_ts, selections, last_click_next, dim_status, current_idx, next_btn_str, False, not btn_click
+    
+    if current_idx == len(questions) - 2:
+        if dim_status:
+            return max_ts, selections, last_click_next, dim_status, next_idx, next_btn_str, False, not btn_click
+        return max_ts, selections, last_click_next, dim_status, current_idx, "Next", False, not btn_click
         
     if dim_status:
-        return max_ts, selections, last_click_next, dim_status, next_idx, next_btn_str, False
-    return max_ts, selections, last_click_next, dim_status, current_idx, next_btn_str, False
+        return max_ts, selections, last_click_next, dim_status, next_idx, next_btn_str, False, not btn_click
+    
+    return max_ts, selections, last_click_next, dim_status, current_idx, next_btn_str, False, not btn_click
 
 # Callback for rendering the radio items
 @callback(
@@ -258,24 +310,34 @@ def update_question(idx, selections, questions, order, prev_q):
         if val and quest_type == "MIDI":
             # update the radio button states
             for i, item in enumerate(midi_comps):
-                if i%2 != 0:
+                if isinstance(item.children, str) or item.children is None:
                     continue
+                # if i%2 != 0:
+                #     continue
 
-                radioLabel = item.children[0].children[0].children
-                #radioLabel = item.children[0].children[0].children[0].children
-                #radioLabel = item.children[0].children
-                radioItem = item.children[1]
-                radioItem.value = val[radioLabel]
+                if not isinstance(item.children, dcc.RadioItems):
+                    radioLabel = item.children[0].children[0].children
+                    radioItem = item.children[1]
+                    radioItem.value = val[radioLabel]
+                else:
+                    radioItem = item.children
+                    radioLabel = item.children.id
+                    radioItem.value = val[radioLabel]
         elif val and quest_type == "SCORE":
             for i, item in enumerate(score_comps):
-                if i%2 != 0:
+                if isinstance(item.children, str) or item.children is None:
                     continue
+                # if i%2 != 0:
+                #     continue
 
-                radioLabel = item.children[0].children[0].children
-                #radioLabel = item.children[0].children[0].children[0].children
-                #radioLabel = item.children[0].children
-                radioItem = item.children[1]
-                radioItem.value = val[radioLabel]  
+                if not isinstance(item.children, dcc.RadioItems):
+                    radioLabel = item.children[0].children[0].children
+                    radioItem = item.children[1]
+                    radioItem.value = val[radioLabel]  
+                else:
+                    radioItem = item.children
+                    radioLabel = item.children.id
+                    radioItem.value = val[radioLabel]
 
     audio = audio_component(audio_path)
     return audio, image_paths[0], image_paths[1], midi_comps, score_comps, prev_q, audio_trans_paths[0], audio_trans_paths[1]
@@ -304,9 +366,10 @@ def update_progress(idx, questions):
     State("finished", "data"),
     State("warning-modal-centered", "is_open"),
     State("current-question", "data"),
+    State("reload", "data"),
     prevent_initial_call=True
 )
-def modal_warning(_, close_modal, next_btn_str, next_ts, last_click_next, dim_status, finished, is_open, current_idx):
+def modal_warning(_, close_modal, next_btn_str, next_ts, last_click_next, dim_status, finished, is_open, current_idx, rel):
     # We start the page with current_idx as -1 and so do nothing 
     # in this case
     if current_idx == -1:
@@ -321,15 +384,34 @@ def modal_warning(_, close_modal, next_btn_str, next_ts, last_click_next, dim_st
     else:
         return True, "WARNING! Choose preferences for all dimensions before proceeding."
 
-# # Store resposes
-@callback(
-    Input("finished", "data"),
-    Input("user-selections", "data")
-)
-def save_responses(finished, selections):
-    if not finished:
-        PreventUpdate
+# # # Store resposes
+# @callback(
+#     Input("finished", "data"),
+#     Input("user-selections", "data"),
+# )
+# def save_responses(finished, selections):
+#     if not finished:
+#         PreventUpdate
     
-    add_response(selections, user_id=current_user.get_id())
-    # with open("responses.json", "w") as f:
-    #     json.dump(selections, f, indent=4)
+#     add_response(selections, user_id=current_user.get_id())
+#     save_lq(current_user.get_id(), current_idx)
+
+
+@callback(
+    Input("selection-changes", "data"),
+)
+def save_responses(changes):
+    if len(changes) == 0:
+        raise PreventUpdate
+
+    add_response(changes, user_id=current_user.get_id())
+
+
+@callback(
+    Input("user-selections", "data"),
+)
+def save_last_question(selections):
+
+    if not selections:
+        raise PreventUpdate
+    save_lq(current_user.get_id(), len(selections)-1)

@@ -53,10 +53,21 @@ referred to by each dimension**.
 ![alt text](assets/ui_imgs/dimensions.png)  
 *Figure 4: Dimensions*
 
+**Question Difficulty**: For each transcription pair, you will be asked to rate the question difficulty for two different sections: 
+appropriateness of a transcription as a starting draft and its quality under several musical dimensions.
+
+![alt text](assets/ui_imgs/difficulty.png)  
+*Figure 5: Question Difficulty*
+
+The difficulty level increases from left to right as shown in the image above following a Likert scale approach. 
+For example, _Very Easy_ means you found the question quite simple to answer; _Neutral_ means the question was clear but required some level 
+of thought and care; _Impossible_ means you found it hard to differentiate between the given transcription pairs. Answering these questions
+allow us to gauge the level of appropriateness for each question.
+
 **Navigation Buttons**: At the end of the page, you have navigation buttons for each question. Note that you can only
 move forward after selecting your **preferences for ALL dimensions**.  
 ![alt text](assets/ui_imgs/nav_btns.png)  
-*Figure 5: Navigation Buttons*
+*Figure 6: Navigation Buttons*
 
 ---
 
@@ -68,7 +79,7 @@ We are interested in your **musical judgment**, informed by your training, exper
 You are encouraged to:
 - Listen to the reference audio as many times as needed
 - Analyze the music internally and mentally transcribe it
-- Evaluate the symbolic transcriptions presented as images. You are provided to the audio renditions to aid you, but we advise you do not
+- Evaluate the symbolic transcriptions presented as images. You are provided the audio renditions to aid you, but we advise you do not
 rely primarily on it; instead base your preferences mainly on what you see.
 - Select which transcription you prefer under the listed dimensions.
 

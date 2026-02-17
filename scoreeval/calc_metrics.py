@@ -215,6 +215,7 @@ def metrics_score_model(data: list, model_id: str) -> pd.DataFrame:
         gt_xml = each[3]
         filename = str(Path(pred_xml).stem) # Will be used for table display
 
+        # score similarity seems to work fine without any problems (so that's great)
         score_sim = scoreSim(gt_xml, pred_xml)
 
         # Muster has some memory leak issues; hence, we do some
@@ -225,7 +226,14 @@ def metrics_score_model(data: list, model_id: str) -> pd.DataFrame:
             continue
         
         score_ser = scoreSer(gt_xml, pred_xml)
-        score_mv2h = mv2h_eval(gt_score, pred_score)
+
+        # remove the try clause later on; I did this
+        # because of some weird spurious extra short notes that are included
+        # in the MIDI score
+        try:
+            score_mv2h = mv2h_eval(gt_score, pred_score)
+        except:
+            continue
 
         metrics_ser.append(score_ser['sym-er'])
 
@@ -283,6 +291,43 @@ def metrics_score_model(data: list, model_id: str) -> pd.DataFrame:
     result_df.columns = pd.MultiIndex.from_tuples(result_df.columns)
     return result_df
 
+
+
+# files = [
+#     {
+#         "model_A": "/home/nkcemeka/Documents/ismir2026/scoreeval/data/score_examples/pred_xml/ZhangH05M_m229_beyer.musicxml",
+#         "model_B": "/home/nkcemeka/Documents/ismir2026/scoreeval/data/score_examples/pred_xml/ZhangH05M_m229_pm2s.musicxml",
+#         "gt": "/home/nkcemeka/Documents/ismir2026/scoreeval/data/xml_score/ZhangH05M_m229.musicxml"
+#     }, 
+
+#     {
+#         "model_A": "/home/nkcemeka/Documents/ismir2026/scoreeval/data/score_examples/pred_xml/Tysman05M_m106_beyer.musicxml",
+#         "model_B": "/home/nkcemeka/Documents/ismir2026/scoreeval/data/score_examples/pred_xml/Tysman05M_m106_nak.musicxml",
+#         "gt": "/home/nkcemeka/Documents/ismir2026/scoreeval/data/xml_score/Tysman05M_m106.musicxml"
+#     }, 
+
+#     {
+#         "model_A": "/home/nkcemeka/Documents/ismir2026/scoreeval/data/score_examples/pred_xml/SunY10M_m509_nak.musicxml",
+#         "model_B": "/home/nkcemeka/Documents/ismir2026/scoreeval/data/score_examples/pred_xml/SunY10M_m509_pm2s.musicxml",
+#         "gt": "/home/nkcemeka/Documents/ismir2026/scoreeval/data/xml_score/SunY10M_m509.musicxml"
+#     }, 
+
+#     {
+#         "model_A": "/home/nkcemeka/Documents/ismir2026/scoreeval/data/score_examples/pred_xml/MunA12M_m61_nak.musicxml",
+#         "model_B": "/home/nkcemeka/Documents/ismir2026/scoreeval/data/score_examples/pred_xml/MunA12M_m61_musescore.musicxml",
+#         "gt": "/home/nkcemeka/Documents/ismir2026/scoreeval/data/xml_score/MunA12M_m61.musicxml"
+#     }, 
+
+#     {
+#         "model_A": "/home/nkcemeka/Documents/ismir2026/scoreeval/data/score_examples/pred_xml/Lin05M_m157_beyer.musicxml",
+#         "model_B": "/home/nkcemeka/Documents/ismir2026/scoreeval/data/score_examples/pred_xml/Lin05M_m157_nak.musicxml",
+#         "gt": "/home/nkcemeka/Documents/ismir2026/scoreeval/data/xml_score/Lin05M_m157.musicxml"
+#     }
+# ]
+
+# for i in range(len(files)):
+#     print(mv2h_eval(files[i]["gt"].replace("xml_score", "midi_score").replace("musicxml", "mid"), \
+#                 files[i]["model_A"].replace("pred_xml", "pred_mscore").replace("musicxml", "mid")))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Calculate Metrics for a given model of your choice!")

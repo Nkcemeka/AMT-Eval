@@ -1,5 +1,5 @@
 import dash
-from dash import html, dcc
+from dash import html, dcc, ctx
 import dash_bootstrap_components as dbc
 from dash import callback
 from dash_app.database import SessionLocal, User, auth_func
@@ -85,6 +85,7 @@ layout = html.Div(
     prevent_initial_call=True,
 )
 def login_button_click(n_clicks, _, username, password, is_open):
+    
     if is_open:
         return False, "", False
     

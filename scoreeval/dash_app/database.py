@@ -6,8 +6,9 @@
 
 # Import necesaary libraries
 import json
-from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, UniqueConstraint
+from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, UniqueConstraint, text, func
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+from sqlalchemy.exc import IntegrityError
 from pathlib import Path
 import bcrypt
 from flask_login import UserMixin
@@ -34,8 +35,11 @@ class User(Base, UserMixin):
     order = Column(String, nullable=False)
 
     # lq stands for last question when user logs out without finishing
-    #lq = Column(int, nullable=False, default=-1) 
+    lq = Column(Integer, nullable=False, default=-1) 
     responses = relationship("Response", back_populates="user")
+    assigned_questions = relationship("Question", secondary="question_assignments", \
+                                      back_populates="assigned_users", 
+                                  order_by="QuestionAssignment.order_index")
 
 class Question(Base):
     __tablename__ = 'questions'
@@ -47,6 +51,8 @@ class Question(Base):
     aTrans_audio = Column(String) # address to audio for transcription A image
     bTrans_audio = Column (String) # address to audio for transcription B image
     responses=relationship("Response", back_populates="question")
+    assigned_users = relationship("User", secondary="question_assignments", \
+                                  back_populates="assigned_questions")
 
 class Response(Base):
     __tablename__ = 'responses'
@@ -63,6 +69,32 @@ class Response(Base):
         UniqueConstraint("user_id", "question_id"),
     )
 
+class QuestionAssignment(Base):
+    __tablename__ = "question_assignments"
+    user_id = Column(String, ForeignKey("users.id"), primary_key=True)
+    question_id = Column(String, ForeignKey("questions.id"), primary_key=True)
+    order_index = Column(Integer, nullable=False) # added this to prevent error when logging out and back in
+
+
+def trigger(engine):
+    with engine.connect() as conn:
+        conn.execute(text("""
+            CREATE TRIGGER IF NOT EXISTS limit_users_per_question
+            BEFORE INSERT ON question_assignments
+            BEGIN
+                SELECT
+                    CASE
+                        WHEN ( 
+                            SELECT COUNT(*)
+                            FROM question_assignments
+                            WHERE question_id = NEW.question_id
+                        ) >= 4
+                        THEN RAISE(ABORT, 'A question cannot have more than 4 users')
+                    END;
+            END;
+        """))
+        conn.commit()
+
 def question_to_dict(q):
     # Make database object JSON serializable by
     # returning a dict
@@ -76,6 +108,71 @@ def question_to_dict(q):
         'bTrans_audio': q.bTrans_audio
     }
 
+def load_questions2(user_id: str, NUM_QUESTIONS: int=10):
+    """ 
+        This loads the questions for a given user_id.
+        If a user has not been assigned a set of questions, 
+        it assigns the user and then returns the assigned
+        questions.
+
+        Args:
+            user_id (str): User id of the user
+            NUM_QUESTIONS (int): Number of questions to be assigned to user
+
+        Returns:
+            final_qdb (list): A list of final set of questions for user
+    """
+    session = SessionLocal()
+    final_qdb = []
+    try:
+        user = session.get(User, user_id)
+
+        # If questions are already assigned for this user, just load and return
+        if user.assigned_questions:
+            return [
+                question_to_dict(each) for each in user.assigned_questions
+            ]
+        
+        # Otherwise, assign questions to user and load them
+        q_db = session.query(Question).outerjoin(\
+            QuestionAssignment).group_by(Question.id).having(func.count(\
+            QuestionAssignment.user_id) < 4).order_by(func.random(), Question.type).all()
+        
+        for i, each in enumerate(q_db):
+            # we shouldn't get into this if condition ideally,
+            # so take it off
+            if user in each.assigned_users:
+                continue
+
+            if len(final_qdb) >= NUM_QUESTIONS:
+                break
+
+            with session.begin_nested(): # create a savepoint
+                #each.assigned_users.append(user)
+                try:
+                    # Trigger fires here (important when two users are racing to write to dB)
+                    # if this fails, we rollback
+                    session.execute(
+                        QuestionAssignment.__table__.insert().values(
+                            user_id=user.id,
+                            question_id=each.id,
+                            order_index=len(final_qdb)
+                        )
+                    )
+
+                    session.flush()
+                    q_dict = question_to_dict(each)
+                    final_qdb.append(q_dict)
+                except IntegrityError:
+                    # rollback to savepoint
+                    session.rollback()
+                    continue
+
+        session.commit()
+        return final_qdb
+    finally:
+        session.close()
+
 def load_questions():
     session = SessionLocal()
     try:
@@ -88,6 +185,24 @@ def load_questions():
             q_dict = question_to_dict(each)
             q_list.append(q_dict)
         return q_list
+    finally:
+        session.close()
+
+def load_lq(user_id: str):
+    session = SessionLocal()
+    try:
+        user = session.query(User).filter_by(id=user_id).first()
+        lq = user.lq
+        return lq
+    finally:
+        session.close()
+
+def save_lq(user_id: str, lq):
+    session = SessionLocal()
+    try:
+        user = session.query(User).filter_by(id=user_id).first()
+        user.lq = lq
+        session.commit()
     finally:
         session.close()
 
@@ -143,7 +258,8 @@ def add_response(response_dict: dict, user_id: str):
 
     for key in response_dict.keys():
         key_int = int(key)
-        quest_id = str(Path(q_list[key_int]["refAddress"]).stem)
+        #quest_id = str(Path(q_list[key_int]["refAddress"]).stem)
+        quest_id = str(Path(q_list[key_int]["id"]).stem)
         resp_type = q_list[key_int]["type"]
         choice = json.dumps(response_dict[key])
 
@@ -199,9 +315,20 @@ def init_database():
     for each in questions:
         # add each question in the question bank
         id = str(Path(each["audio"]).stem)
-        question = Question(id=id, aTrans=each["images"][0], refAddress=each["audio"],
-                    bTrans=each["images"][1], aTrans_audio=each["audio_trans"][0],\
-                    bTrans_audio=each["audio_trans"][1], type=each["type"])
+
+        if each["type"] == "MIDI":
+            question = Question(id=id, aTrans=each["images"][0], refAddress=each["audio"],
+                        bTrans=each["images"][1], aTrans_audio=each["audio_trans"][0],\
+                        bTrans_audio=each["audio_trans"][1], type=each["type"])
+        elif each["type"] == "SCORE":
+            suffix_name1 = Path(each["audio_trans"][0]).stem.split("_")[-1]
+            suffix_name2 = Path(each["audio_trans"][1]).stem.split("_")[-1]
+            id = Path(each["audio"]).stem + "_" + suffix_name1 + "_" + suffix_name2
+            question = Question(id=id, aTrans=each["images"][0], refAddress=each["audio"],
+                        bTrans=each["images"][1], aTrans_audio=each["audio_trans"][0],\
+                        bTrans_audio=each["audio_trans"][1], type=each["type"])
+        else:
+            raise ValueError(f"Unknown data type: {each[type]}")
         session.add(question)
 
     session.commit()

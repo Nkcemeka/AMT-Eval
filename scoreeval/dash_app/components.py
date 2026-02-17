@@ -3,10 +3,11 @@ from dash import dcc
 import dash_bootstrap_components as dbc
 
 # Set number of dimensions for MIDI and Score
-NUM_DIM_MIDI = 5
-NUM_DIM_SCORE = 6
-MIDI_LABELS = ['Overall', 'Draft', 'Pitch', 'Rhythm', 'Harmony']
-SCORE_LABELS = ['Overall', 'Draft', 'Pitch', 'Rhythm', 'Voice', 'Harmony']
+# We add 2 for likert based questions
+NUM_DIM_MIDI = 5 + 2
+NUM_DIM_SCORE = 6 + 2 
+MIDI_LABELS = ['Draft', 'Overall', 'Pitch', 'Rhythm', 'Harmony']
+SCORE_LABELS = ['Draft', 'Overall', 'Pitch', 'Rhythm', 'Voice', 'Harmony']
 
 TOOLTIP_TEXT = {
     "Overall": "The Overall dimension refers to transcription preference in terms of overall similarity to the reference",
@@ -25,6 +26,30 @@ TOOLTIP_IDS = {
     "Voice": "target-voice",
     "Draft": "target-draft"
 }
+
+def likert_component(radio_id):
+    # Row of radio buttons
+    mapping = {
+        0: 'Very easy',
+        1: 'Easy',
+        2: 'Neutral',
+        3: 'Difficult',
+        4: 'Impossible'
+    }
+
+    return html.Div(dcc.RadioItems(
+            id=radio_id,
+            options=[{"label": f"{mapping[i]}", "value": str(i)} for i in range(5)],
+            labelStyle={"display": "grid"},
+            style={
+                "display": "flex",
+                "justifyContent": "space-between",
+                "width": "100%",
+                "margin": "auto",
+                "margin-left": "0px",
+            },
+            value=None
+        ), style={"width": "50%"})
 
 
 def audio_component(audio_path: str) -> html.Div:
@@ -48,7 +73,7 @@ def audio_component(audio_path: str) -> html.Div:
 gen_comp = dbc.Row([
         dbc.Col(html.Img(id='img-1', style={"width": "100%", "border": "1px solid #ccc"})),
         dbc.Col(html.Img(id='img-2', style={"width": "100%", "border": "1px solid #ccc"}))
-    ], style={"margin-bottom": "15px"})
+    ], style={"margin-bottom": "25px"})
 
 audio_trans_comp = dbc.Row([
         dbc.Col(html.Audio(controls=True, id='aud-trans-1')),
@@ -153,16 +178,71 @@ def midi_comp_layout():
     # Get the MIDI components
     midi_list_comps = list_comps(labels=MIDI_LABELS)
     midi_comps = []
-    for item in midi_list_comps:
-        midi_comps.append(item)
-        midi_comps.append(html.Hr())
+    for idx, item in enumerate(midi_list_comps):
+        if idx == 0: # idx 0 is Draft
+            midi_comps.append(html.H5("Select which transcription you prefer as a starting draft.", \
+                                style={"margin-bottom": "30px"}))
+            midi_comps.append(html.Hr(style={'border': '1px solid', "borderColor": "#000000", "opacity": "unset"}))
+            midi_comps.append(item)
+            #midi_comps.append(html.Hr(style={'border': '1px solid', 'width': '50%', 'margin-bottom': '0px', \
+            #                                 'margin-top': "20px", "borderColor": "#000000", "opacity": "unset"})),
+            midi_comps.append(html.H5("How difficult was it to answer the question?"))
+            midi_comps.append(html.Hr(style={'border': '1px solid', 'width': '50%', 'margin-top': '0px', \
+                                             "borderColor": "#000000", "opacity": "unset"})),
+            midi_comps.append(likert_component("likert-midi-draft"))
+            continue
+        elif idx == 1:
+            midi_comps.append(html.H5("Select which transcription you prefer in each of the following dimensions.", \
+                                style={"margin-bottom": "30px", "margin-top": "60px"}))
+            midi_comps.append(html.Hr(style={'border': '1px solid', "borderColor": "#000000", "opacity": "unset"}))
+            midi_comps.append(item)
+            midi_comps.append(html.Hr())
+        elif idx == len(midi_list_comps) - 1:
+            midi_comps.append(item)
+            #midi_comps.append(html.Hr(style={'border': '1px solid', 'width': '50%', 'margin-bottom': '0px', \
+            #                                 'margin-top': "20px", "borderColor": "#000000", "opacity": "unset"})),
+            midi_comps.append(html.H5("How difficult was it to answer the question?"))
+            midi_comps.append(html.Hr(style={'border': '1px solid', 'width': '50%', 'margin-top': '0px', \
+                                            "borderColor": "#000000", "opacity": "unset"})),
+            midi_comps.append(likert_component("likert-midi-trans"))
+        else:
+            midi_comps.append(item)
+            midi_comps.append(html.Hr())
     return midi_comps
 
 # Get the Score components
 def score_comp_layout():
     score_list_comps = list_comps(labels=SCORE_LABELS, suffix="score")
     score_comps = []
-    for item in score_list_comps:
-        score_comps.append(item)
-        score_comps.append(html.Hr())
+    for idx, item in enumerate(score_list_comps):
+        if idx == 0: # idx 0 is Draft
+            score_comps.append(html.H5("Select which transcription you prefer as a starting draft.", \
+                                style={"margin-bottom": "30px"}))
+            score_comps.append(html.Hr(style={'border': '1px solid', "borderColor": "#000000", "opacity": "unset"}))
+            score_comps.append(item)
+            #score_comps.append(html.Hr(style={'border': '1px solid', 'width': '50%', 'margin-bottom': '0px', \
+            #                                 'margin-top': "20px", "borderColor": "#000000", "opacity": "unset"})),
+            score_comps.append(html.H5("How difficult was it to answer the question?"))
+            score_comps.append(html.Hr(style={'border': '1px solid', 'width': '50%', 'margin-top': '0px', \
+                                             "borderColor": "#000000", "opacity": "unset"})),
+            score_comps.append(likert_component("likert-score-draft"))
+            continue
+        elif idx == 1:
+            score_comps.append(html.H5("Select which transcription you prefer in each of the following dimensions.", \
+                                style={"margin-bottom": "30px", "margin-top": "60px"}))
+            score_comps.append(html.Hr(style={'border': '1px solid', "borderColor": "#000000", "opacity": "unset"}))
+            score_comps.append(item)
+            score_comps.append(html.Hr())
+        elif idx == len(score_list_comps)-1:
+            #score_comps.append(html.Hr(style={'border': '1px solid', 'width': '50%', 'margin-bottom': '0px', \
+            #                                 'margin-top': "20px", "borderColor": "#000000", "opacity": "unset"})),
+            score_comps.append(item)
+            score_comps.append(html.H5("How difficult was it to answer the question?"))
+            score_comps.append(html.Hr(style={'border': '1px solid', 'width': '50%', 'margin-top': '0px', \
+                                            "borderColor": "#000000", "opacity": "unset"})),
+            score_comps.append(likert_component("likert-score-trans"))
+        else:
+            score_comps.append(item)
+            score_comps.append(html.Hr())
+                
     return score_comps

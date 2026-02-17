@@ -12,12 +12,14 @@ from externals.MIDI2ScoreTransformer.midi2scoretransformer.score_utils import po
 from externals.PM2S.pm2s import CRNNJointPM2S
 import subprocess
 from pathlib import Path
+import librosa
 import tempfile
 import music21 as m21
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import shutil
+import mido
 from constants import MUSESCORE_PATH, LD_PATH
 import os
 from typing import Union, Iterable
@@ -33,8 +35,10 @@ from score_transformer import score_similarity
 from muster import muster
 from bs4 import BeautifulSoup
 from bs4.element import Tag
+import matplotlib
 import shutil
 import uuid
+from scipy.interpolate import interp1d
 import zipfile
 from fractions import Fraction
 from copy import deepcopy
@@ -42,17 +46,18 @@ from copy import deepcopy
 # Define PathLike
 PathLike = Union[str, bytes, os.PathLike, Path]
 
-
 # ============================
 # Section 1: MIDI Utilities
 # ============================
-
 def midi_to_csv(midi_obj: pretty_midi.PrettyMIDI):
     """
         Convert a pretty MIDI object to a pandas DataFrame and save as csv
 
         Args:
             midi_obj (pretty_midi.PrettyMIDI): PrettyMIDI object
+
+        Returns:
+            df (pd.DataFrame): DataFrame Object
     """
     note_events = []
     for note in midi_obj.instruments[0].notes:
@@ -89,27 +94,42 @@ def csv_to_list(csv):
 # ====================================
 # Section 2: Visulalization Utilities
 # ====================================
+def draw_keyboard(ax: matplotlib.axes.Axes, pitch_min: int, pitch_max: int) -> None:
+    """  
+        Draw the piano keyboard suitable for a piano roll given
+        the pitch_min and pitch_max.
 
-def draw_keyboard(ax, pitch_min, pitch_max):
+        Args:
+            ax (matplotlib.axes.Axes): Axes to draw keyboard
+            pitch_min (int): minimum MIDI pitch 
+            pitch_max (int): maximum MIDI pitch
+        
+        Returns:
+            None
+    """
+    # Go through each MIDI pitch
     for midi_num in range(int(pitch_min), int(pitch_max)+1):
         # Determine if it's a black or white key
         note_name = (midi_num % 12)
         is_black = note_name in [1,3,6,8,10]  # C#, D#, F#, G#, A#
         color = 'black' if is_black else 'white'
+        font_size = max(4, min(10, 100 / (pitch_max - pitch_min))) 
+
+        # Create a rectangle for the key and center it
         rect = patches.Rectangle((0, midi_num-0.5), 1, 1, facecolor=color, edgecolor='k')
         ax.add_patch(rect)
 
         if not is_black:
             ax.text(0.5, midi_num, pretty_midi.utilities.note_number_to_name(midi_num),
                     ha='center', va='center',
-                    fontsize=8, color='black')
+                    fontsize=font_size, color='black')
 
     ax.set_xlim(0, 1)
     ax.set_ylim(pitch_min-1.5, pitch_max+1.5)
     ax.axis('off')
 
 def visualize_piano_roll(score: list, output_path: str, xlabel: str='Time (seconds)', ylabel:str='', \
-                         colors: str='viridis', velocity_alpha: bool=False,
+                         colors: str='viridis', velocity_alpha: bool=False, min_pitch: int = 21, max_pitch: int = 108,
                          figsize: tuple=(16, 8), ax=None, dpi: int=300, save=True):
     """
         Plot a pianoroll visualization
@@ -131,11 +151,6 @@ def visualize_piano_roll(score: list, output_path: str, xlabel: str='Time (secon
             fig: The created matplotlib figure or None if ax was given.
             ax: The used axes
     """
-    # fig = None
-    # if ax is None:
-    #     fig = plt.figure(figsize=figsize, dpi=dpi)
-    #     ax = plt.subplot(1, 1, 1)
-
     fig, (ax_keys, ax) = plt.subplots(
         1, 2, figsize=figsize, dpi=dpi,
         gridspec_kw={'width_ratios':[1, 12]}, sharey=True
@@ -151,8 +166,8 @@ def visualize_piano_roll(score: list, output_path: str, xlabel: str='Time (secon
         cmap = plt.get_cmap(str(colors))
         colors = {label: cmap(i / max(len(labels_set)-1, 1)) for i, label in enumerate(labels_set)}
 
-    pitch_min = min(note[2] for note in score)
-    pitch_max = max(note[2] for note in score)
+    # pitch_min = min(note[2] for note in score)
+    # pitch_max = max(note[2] for note in score)
     time_min = min(note[0] for note in score)
     time_max = max(note[0] + note[1] for note in score)
 
@@ -163,20 +178,129 @@ def visualize_piano_roll(score: list, output_path: str, xlabel: str='Time (secon
                                  edgecolor='k', facecolor=colors[label], alpha=velocity)
         ax.add_patch(rect)
 
-    yticks = np.arange(pitch_min, pitch_max + 1)
+    # This was not here before for pitch_min and pitch_max
+    yticks = np.arange(min_pitch, max_pitch + 1)
     yticks_labels = [pretty_midi.utilities.note_number_to_name(p) for p in yticks]
-    ax.set_ylim([pitch_min - 1.5, pitch_max + 1.5])
+    ax.set_ylim([min_pitch - 1.5, max_pitch + 1.5])
     ax.set_xlim([min(time_min, 0), time_max + 0.5])
     ax.set_yticks(yticks)
     ax.set_yticklabels(yticks_labels)
+
+    # This helps for piano rolls (removes horizontal lines at center of the piano keys;
+    # rather, it spans the width)
+    # Minor ticks = rectangle boundaries
+    ax.set_yticks(
+        np.arange(min_pitch - 0.5, max_pitch + 1.5, 1),
+        minor=True
+    )
+
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
-    ax.grid()
+    ax.grid(which="minor", axis="y")
+    ax.grid(which='major', axis="x")
     ax.set_axisbelow(True)
-    ax.legend([patches.Patch(linewidth=1, edgecolor='k', facecolor=colors[key]) for key in labels_set],
-              labels_set, loc='upper right', framealpha=1)
+    draw_keyboard(ax_keys, min_pitch, max_pitch)
+
+    if fig is not None:
+        plt.tight_layout()
+
+    if save:
+        plt.savefig(f"{output_path}", dpi=dpi, bbox_inches="tight")
+        plt.close(fig)
+
+def visualize_piano_roll_spect(score: list, spect: np.ndarray, freqs: np.ndarray, midi_bins: np.ndarray, \
+                        sr: float, output_path: str, xlabel: str='T (s)', ylabel:str='', \
+                         colors: str='viridis', velocity_alpha: bool=False, min_pitch: int = 21, max_pitch: int = 108,
+                         figsize: tuple=(16, 8), ax=None, dpi: int=300, save=True):
+    """
+        Plot a pianoroll visualization
+
+        Args:
+            score (list): List of note events
+            spect (np.ndarray): Computed spectrogram
+            freqs (np.ndarray): FFT freqs from librosa w/out the zero frequency
+            sr (float): sample rate for the audio
+            output_path (str): Path to save the piano roll visualization
+            xlabel (str): Label for x axis (Default value = 'T (s)')
+            ylabel (str): Label for y axis (Default value = 'Pitch' or '')
+            colors (str): Several options: 1. string of matplotlib colormap,
+                2. list or np.ndarray of matplotlib color specifications
+            velocity_alpha (bool): Use the velocity value for the alpha value of the corresponding rectangle
+                (Default value = False)
+            figsize (tuple): Width, height in inches (Default value = (12)
+            ax: The Axes instance to plot on (Default value = None)
+            dpi: int: Dots per inch (Default value = 300)
+
+        Returns:
+            fig: The created matplotlib figure or None if ax was given.
+            ax: The used axes
+    """
+    # Create our canvas for plotting/drawing the keyboard in one column
+    # and main plot in the other column; sharey is True as seen below...
+    fig, (ax_keys, ax) = plt.subplots(
+        1, 2, figsize=figsize, dpi=dpi,
+        gridspec_kw={'width_ratios':[1, 12]}, sharey=True
+    )
+
+    labels_set = sorted(set([note[4] for note in score]))
+    if isinstance(colors, list):
+        colors = {label: colors[i % len(colors)] for i, label in enumerate(labels_set)}
+    elif isinstance(colors, dict):
+        pass  # already a dict
+    else:
+        # fallback: use a default colormap from matplotlib
+        cmap = plt.get_cmap(str(colors))
+        colors = {label: cmap(i / max(len(labels_set)-1, 1)) for i, label in enumerate(labels_set)}
+
+    time_min = min(note[0] for note in score)
+    time_max = max(note[0] + note[1] for note in score)
+
+    for start, duration, pitch, velocity, label in score:
+        if velocity_alpha is False:
+            velocity = None
+        rect = patches.Rectangle((start, pitch - 0.5), duration, 1, linewidth=1,
+                                 edgecolor='k', facecolor=colors[label], alpha=velocity, zorder=3)
+        ax.add_patch(rect)
+
     
-    draw_keyboard(ax_keys, pitch_min, pitch_max)
+    # Interpolate spectrogram to linear MIDI scale
+    midi_target = np.linspace(min_pitch, max_pitch, freqs.shape[0])
+    spect_midi = np.zeros((len(midi_target), spect.shape[1]))
+
+    for t in range(spect.shape[1]):
+        # Interpolate each time frame
+        # we index from 1 below due to the 0th frequency bin. Freqs does not
+        # include this due to divide by zero errors when converting to MIDI pitch
+        interpolator = interp1d(midi_bins, spect[1:, t], kind='linear', 
+                            bounds_error=False, fill_value=-80)
+        spect_midi[:, t] = interpolator(midi_target)
+
+
+    t_axis = librosa.frames_to_time(np.arange(spect_midi.shape[1]+1), sr=sr)
+    spect_y_axis = np.linspace(min_pitch-0.5, max_pitch + 0.5, freqs.shape[0]+1)
+    ax.pcolormesh(t_axis, spect_y_axis, spect_midi, cmap='plasma',\
+                   shading='auto', alpha=0.8, zorder=1)
+    
+    yticks = np.arange(min_pitch, max_pitch + 1)
+    yticks_labels = [pretty_midi.utilities.note_number_to_name(p) for p in yticks]
+    ax.set_ylim([min_pitch - 1.5, max_pitch + 1.5])
+    ax.set_xlim([min(time_min, 0), time_max + 0.5])
+    ax.set_yticks(yticks)
+    ax.set_yticklabels(yticks_labels)
+
+    # This helps for piano rolls (removes horizontal lines at center of the piano keys;
+    # rather, it spans the width)
+    # Minor ticks = rectangle boundaries
+    ax.set_yticks(
+        np.arange(min_pitch - 0.5, max_pitch + 1.5, 1),
+        minor=True
+    )
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.grid(which="minor", axis="y")
+    ax.grid(which='major', axis="x")
+    ax.set_axisbelow(True)
+    draw_keyboard(ax_keys, min_pitch, max_pitch)
 
     if fig is not None:
         plt.tight_layout()
@@ -186,24 +310,56 @@ def visualize_piano_roll(score: list, output_path: str, xlabel: str='Time (secon
         plt.close(fig)
 
 def generate_piano_roll(midi: pretty_midi.PrettyMIDI, output_path: str, \
-                        figsize: tuple=(16,8), dpi: int=300, save: bool=True):
+                        min_pitch: int = 21, max_pitch: int=108, figsize: tuple=(16,10), dpi: int=300, save: bool=True):
     """ 
         Generate piano roll
 
         Args:
             midi (pretty_midi.PrettyMIDI): prettyMIDI object
             output_path (str): Path to store the piano roll
+        
+        Returns:
+            None
     """
     csv = midi_to_csv(midi)
     score = csv_to_list(csv)
-    visualize_piano_roll(score, output_path, figsize=figsize, dpi=dpi, save=save)
+    visualize_piano_roll(score, output_path, min_pitch=min_pitch, max_pitch=max_pitch, figsize=figsize, dpi=dpi, save=save)
 
+
+def generate_piano_roll_spect(midi: pretty_midi.PrettyMIDI, spect: np.ndarray, output_path: str, \
+        freqs: np.ndarray, sr: float, min_pitch: int = 21, max_pitch: int=108, \
+        figsize: tuple=(16,10), dpi: int=300, save: bool=True):
+    """ 
+        Generate piano roll with an overlay of
+        audio spectrogram!
+
+        Args:
+            midi (pretty_midi.PrettyMIDI): prettyMIDI object
+            spect (np.ndarray): Spectrogram generated via librosa
+            output_path (str): Path to store the piano roll
+            min_pitch (int): Minimum MIDI pitch
+            max_pitch (int): Maximum MIDI pitch
+            freqs (np.ndarray): FFT frequencies excluding the 0th frequency
+            midi_bins (np.ndarray)
+    """
+    csv = midi_to_csv(midi)
+    score = csv_to_list(csv)
+    midi_bins = librosa.hz_to_midi(freqs)
+    visualize_piano_roll_spect(score, spect, freqs, midi_bins, sr, output_path, \
+                    min_pitch=min_pitch, max_pitch=max_pitch, figsize=figsize, dpi=dpi, save=save)
 
 # ====================================
 # Section 3: Conversion Utilities
 # ====================================
-
 def musescore_convert(input_path: str, output_path: str):
+    """ 
+        Performs conversions from one file to another
+        using the Musescore application.
+
+        Args:
+            input_path (str): Path to input file to convert
+            output_path (str): Output path to convert to
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
         suffix = str(Path(input_path).suffix)[1:] # we start from 1 to remove the dot
         shutil.copy(input_path, f"{tmpdir}/temp.{suffix}")
@@ -232,23 +388,21 @@ def concatenate_images(
     """
     Concatenate Images to form one single image.
 
-    Parameters
-    ----------
-    filenames: Iterable[PathLike]
-        A list of images to be concatenated. This method assumes
-        that all of the images have the same resolution and color mode
-        (that is the case for png files generated by MuseScore).
-        See `partitura.io.musescore.render_musescore`.
-    out : Optional[PathLike]
-        The output file where the image will be saved.
-    concat_mode : {"vertical", "horizontal"}
-        Whether to concatenate the images vertically or horizontally.
-        Default is vertical.
+    Args:
+        filenames: Iterable[PathLike]
+            A list of images to be concatenated. This method assumes
+            that all of the images have the same resolution and color mode
+            (that is the case for png files generated by MuseScore).
+            See `partitura.io.musescore.render_musescore`.
+        out : Optional[PathLike]
+            The output file where the image will be saved.
+        concat_mode : {"vertical", "horizontal"}
+            Whether to concatenate the images vertically or horizontally.
+            Default is vertical.
 
-    Returns
-    -------
-    new_image : Optional[PIL.Image.Image]
-        The output image. This is only returned if `out` is not None.
+    Returns:
+        new_image : Optional[PIL.Image.Image]
+            The output image. This is only returned if `out` is not None.
     """
     # Check that concat mode is vertical or horizontal
     if concat_mode not in ("vertical", "horizontal"):
@@ -298,6 +452,15 @@ def concatenate_images(
         return new_image
 
 def musescore_convert_img(input_path: str, output_path: str):
+    """ 
+        Performs conversions from one image file to another
+        using the Musescore application. This is for images
+        specifically.
+
+        Args:
+            input_path (str): Path of input image file to convert
+            output_path (str): Output path to convert to
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
         suffix = str(Path(input_path).suffix)[1:] # we start from 1 to remove the dot
         shutil.copy(input_path, f"{tmpdir}/temp.{suffix}")
@@ -325,7 +488,6 @@ def musescore_convert_img(input_path: str, output_path: str):
 # ============================================
 # Section 4: MIDI-to-Score Inference Utilities
 # ============================================
-
 def nakamura_inference(perf_midi_path: str, score_midi_path: str, data_type: str="pop") -> None:
     """ 
         Perform inference with Nakamura score model.
@@ -335,6 +497,9 @@ def nakamura_inference(perf_midi_path: str, score_midi_path: str, data_type: str
             perf_midi_path (str): Path to performance midi file
             score_midi_path (str): Path to where to store the score (pass an absolute path)
             data_type (str): Pop/classical
+        
+        Returns:
+            None
     """
     # We do this to get rid of the ".mid" extension
     parent_perf, parent_stem = Path(perf_midi_path).parent, Path(perf_midi_path).stem
@@ -347,6 +512,16 @@ def nakamura_inference(perf_midi_path: str, score_midi_path: str, data_type: str
     subprocess.run(cmd, cwd="./externals/Nakamura/RQ")
 
 def pm2s_inference(perfm_midi_path: str, score_midi_path: str):
+    """ 
+        Perform inference with PM2S MIDI to score model.
+
+        Args:
+            perf_midi_path (str): Path to performance midi file
+            score_midi_path (str): Path to where to store the score
+        
+        Returns:
+            None
+    """
     pm2s_processor = CRNNJointPM2S(
     beat_pps_args = {
         'prob_thresh': 0.5,
@@ -366,6 +541,16 @@ def pm2s_inference(perfm_midi_path: str, score_midi_path: str):
     pm2s_processor.convert(perfm_midi_path, score_midi_path, start_time=0, end_time=end_time)
 
 def beyer_midi_xml(midi_file: str, output_path: str) -> None:
+    """ 
+        Perform inference with the Beyer model (goes from MIDI to score).
+
+        Args:
+            midi_file (str): Path to performance midi file
+            output_path (str): Path to store the corresponding musicXML file
+        
+        Returns:
+            None
+    """
     print("Starting inference...")
     model = Roformer.load_from_checkpoint("./extras/MIDI2ScoreTF.ckpt")
     model.to("cuda" if torch.cuda.is_available() else "cpu")
@@ -380,22 +565,60 @@ def beyer_midi_xml(midi_file: str, output_path: str) -> None:
     mxl.metadata.composer=''
     mxl.write('musicxml', fp=f'{output_path}', makeNotation=True)
 
+def beyer_mscore_postprocess(midi_path: str, save_path: str=''):
+    """
+        Postprocess the mscore generated 
+        from the beyer model.
+
+        Args:
+            midi_path (str): Path to MIDI file
+            tempo (float): Tempo of the piece
+            save_path (str): Path to save the file
+        
+        Returns:
+            None
+    """
+    # Get the correct tempo for Beyer and fix it so 
+    # we can render proper audio for the study
+    # We assume the mscore is in 120BPM since we generated it from
+    # Musescore. So, it probably saved it with that tempo
+    ts_changes = (pretty_midi.PrettyMIDI(midi_path)).time_signature_changes
+    num = ts_changes[0].numerator
+    den = ts_changes[0].denominator
+    factor = 4/den # if den is 8, this is 1/2
+    # since mscore is saved as 120BPM, we don't need to pass ts to bpm2tempo
+    tempo = mido.bpm2tempo(120, time_signature=(num, den)) # convert to microseconds per quarternote
+    mid = mido.MidiFile(midi_path)
+    new_mid = mido.MidiFile(ticks_per_beat=mid.ticks_per_beat)
+    for i, track in enumerate(mid.tracks):
+        new_track = mido.MidiTrack()
+        new_mid.tracks.append(new_track)
+        if i == 0:
+            new_track.append(mido.MetaMessage('set_tempo', tempo=tempo, time=0))
+        
+        for msg in track:
+            if msg.type == 'set_tempo':
+                continue 
+            new_track.append(msg)
+    new_mid.save(save_path)
+
 # ============================================
 # Section 5: Audio-to-MIDI Inference Utilities
 # ============================================
-
 def trans(audioPath: str, confPath: str="./extras/trans_config.conf", weight: str="./externals/Transkun/transkun/pretrained/2.0.pt", \
           segmentHopSize: Optional[float]=None, segmentSize: Optional[float]=None):
     """ 
         Transcribes an audio file using the transkun model
 
         Args:
-        -----
             audioPath (str): path to audio file
             confPath (str): path to the model config
             weight (str): path to pretrained weights
             segmentHopSize (float): Not required. Default is in config
             segmentSize (float): Not required. Default is in config
+        
+        Returns:
+            None
     """
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -408,7 +631,6 @@ def trans(audioPath: str, confPath: str="./extras/trans_config.conf", weight: st
     checkpoint = torch.load(weight, map_location = device)
 
     model = TransKun(conf = conf).to(device)
-    # print("#Param(M):", computeParamSize(model))
 
     if not "best_state_dict" in checkpoint:
         model.load_state_dict(checkpoint["state_dict"], strict=False)
@@ -438,7 +660,6 @@ def trans(audioPath: str, confPath: str="./extras/trans_config.conf", weight: st
 # =========================================
 # Section 6: Audio-to-MIDI Metric Utilities
 # =========================================
-
 def get_note_scores(pred_midi, gt_midi):
     """ 
         Get note-level scores for transcription
@@ -575,6 +796,8 @@ def compute_mpteval(pred: str, target: str, result_type: str="harmony") -> dict 
         return result_dict
     
 # Credits: https://github.com/Yujia-Yan/Transkun/blob/main/transkun/Evaluation.py
+# The code below is useful for calculating activation-level metrics proposed in
+# the transkun paper. I still need to study the eqns...
 def intersectTwoInterval(intervalA, intervalB):
     l = max(intervalA[0], intervalB[0])
     r = min(intervalA[1], intervalB[1])
@@ -598,8 +821,6 @@ def findIntersectListOfIntervals(listA, listB):
         else:
             j = j+1
 
-        
-    
     return result
     
 def computeIntervalLengthSum(intervals, countZero=True):
@@ -690,11 +911,9 @@ def compute_activation_metrics(pred: str|pretty_midi.PrettyMIDI, gt: str|pretty_
     f = (2*num_correct)/(num_pred + num_gt + 1e-8)
     return p, r, f
 
-
 # =========================================
 # Section 7: MIDI-to-Score Metric Utilities
 # =========================================
-
 # Credits: https://github.com/TimFelixBeyer/MIDI2ScoreTransformer
 def score_similarity_normalized(est, gt, full=False):
     if est is None or gt is None:
@@ -796,8 +1015,14 @@ def mv2h_eval(gt_midi: str, pred_midi: str) -> dict:
         # Now perform alignment process and compute metric
         cmd_mv2h = ["java", "-cp", "bin", "mv2h.Main", "-g", f"{tmpdir}/gt.txt", "-t", \
                 f"{tmpdir}/pred.txt", "-a"]
-        res = subprocess.run(cmd_mv2h, cwd=MV2H_PATH, check=True, capture_output=True,\
-                text=True)
+        
+        try:
+            res = subprocess.run(cmd_mv2h, cwd=MV2H_PATH, check=True, capture_output=True,\
+                    text=True, timeout=10)
+        except subprocess.TimeoutExpired:
+            # skip segments that take way too long to align
+            raise TimeoutError('MV2H Eval taking too long...')
+        
         res = res.stdout
         res_list = res.split("\n")
         if res_list[-1] == '':
@@ -925,7 +1150,6 @@ def scoreSer(gt_xml: str, pred_xml: str) -> float:
             gt_xml (str): Ground truth musicXML file
             pred_xml (str): Predicted musicXML file
 
-
         Returns:
         ---------
             result (dict): Dict containing symoblic and
@@ -1016,7 +1240,7 @@ def get_xml_score_revamp(score: m21.stream.Score, measure_nums: list, key_sig: l
 
     return new_score
 
-def get_xml_score(score: m21.stream.Score, measure_nums: list, key_sig: list, time_sig: list) -> m21.stream.Score:
+def get_xml_score(score: m21.stream.Score, measure_nums: list, key_sig: list, time_sig: list, tempos: list) -> m21.stream.Score:
     """
         Gets measures from a ground truth score and
         returns this as a new score.
@@ -1027,6 +1251,7 @@ def get_xml_score(score: m21.stream.Score, measure_nums: list, key_sig: list, ti
             measure_nums (list): Measures to extract
             key_sig (list): List of key signature changes
             time_sig (list): List of time signature changes
+            tempos (list): List of tempos
 
         Returns:
         --------
@@ -1054,11 +1279,12 @@ def get_xml_score(score: m21.stream.Score, measure_nums: list, key_sig: list, ti
 
             # if a tempo marking exists in the measure we will capture it, 
             # But that is not often the case
-            tempo_markings = m.getContextByClass(m21.tempo.MetronomeMark)
-            if tempo_markings:
-                if tempo_markings not in m.recurse().getElementsByClass(m21.tempo.MetronomeMark):
-                    #m.insert(0, tempo_markings)
-                    new_m.insert(0, tempo_markings)
+            # comment below later if tempo list being passed does not work
+            # tempo_markings = m.getContextByClass(m21.tempo.MetronomeMark)
+            # if tempo_markings:
+            #     if tempo_markings not in m.recurse().getElementsByClass(m21.tempo.MetronomeMark):
+            #         #m.insert(0, tempo_markings)
+            #         new_m.insert(0, tempo_markings)
 
             if idx == 0:
                 clef = m.getContextByClass(m21.clef.Clef)
@@ -1075,10 +1301,22 @@ def get_xml_score(score: m21.stream.Score, measure_nums: list, key_sig: list, ti
             if idx == 0:
                 ts = m21.meter.TimeSignature(time_sig[idx][0])
                 ks = m21.key.KeySignature(key_sig[idx][1])
+                if ts.numerator % 3 == 0 and ts.numerator >= 6:
+                    referent = m21.note.Note(type='quarter', dots=1)
+                else:
+                    denom_map = {
+                        1: 'whole',
+                        2: 'half',
+                        4: 'quarter',
+                        8: 'eighth'
+                    }
+                    referent = m21.note.Note(type=denom_map[ts.denominator])
+                tempo = m21.tempo.MetronomeMark(numberSounding=tempos[0], referent=referent)
                 # m.insert(0, ts)
                 # m.insert(0, ks)
                 new_m.insert(0, ts)
                 new_m.insert(0, ks)
+                new_m.insert(0, tempo)
             else:
                 # Create time and signature objects only if they change
                 if time_sig[idx] != time_sig[idx-1]:
@@ -1113,10 +1351,95 @@ def get_xml_score(score: m21.stream.Score, measure_nums: list, key_sig: list, ti
 
             #new_part.append(m)
             new_part.append(new_m)
-
         new_score.append(new_part)
-
     return new_score
+
+def add_tempo_to_midi(midi_path: str, tempo: float, ts: tuple, save_path: str=''):
+    """
+        Adds tempo to a MIDI file. 
+        Assumes the tempo throughout the MIDI file
+        is constant. 
+
+        Args:
+            midi_path (str): Path to MIDI file
+            tempo (float): Tempo of the piece
+            save_path (str): Path to save the file
+        
+        Returns:
+            new_midi (mido.MidiFile): MidiFile object if save_path is an empty string
+    """
+    tempo = mido.bpm2tempo(tempo, time_signature=ts) # convert to microseconds per quarternote
+    mid = mido.MidiFile(midi_path)
+    new_mid = mido.MidiFile(ticks_per_beat=mid.ticks_per_beat)
+    for i, track in enumerate(mid.tracks):
+        new_track = mido.MidiTrack()
+        new_mid.tracks.append(new_track)
+        if i == 0:
+            new_track.append(mido.MetaMessage('set_tempo', tempo=tempo, time=0))
+        
+        for msg in track:
+            if msg.type == 'set_tempo':
+                continue 
+            new_track.append(msg)
+    
+    if save_path == '':
+        return new_mid
+    new_mid.save(save_path)
+
+def midi2audio(midi_obj, fs=16000, sf2_path="soundfonts/MuseScore_General.sf2") -> np.ndarray:
+    """  
+        Convert MIDI to audio
+
+        Args:
+            midi_obj: prettyMIDI | Mido object 
+            fs: sampling frequency/rate
+            sf2_path: Path to soundfont file
+
+        Return:
+            audio_data (np.ndarray): rendered audio data
+    """
+    # Convert MIDI to audio
+    if isinstance(midi_obj, mido.MidiFile):
+        # can only do this in > version 0.2.11 of pretty_midi
+        midi_obj = pretty_midi.PrettyMIDI(mido_object=midi_obj)
+
+    audio_data = midi_obj.fluidsynth(fs=fs, \
+                sf2_path=sf2_path)
+    return audio_data
+
+def get_midi_note_events_strict2(midi: pretty_midi.PrettyMIDI, midi_score: pretty_midi.PrettyMIDI, \
+                start: float, end: float, eps=0.02) -> np.ndarray:
+    
+    # get notes from midi_score
+    # midi_score_pitches = set()
+    # for n in midi_score.instruments[0].notes:
+    #     midi_score_pitches.add(n.pitch)
+
+    note_events = []
+    for instrument in midi.instruments:
+        if not instrument.is_drum:
+            for note in instrument.notes:
+                if note.start >= end or note.end <= start:
+                    continue
+
+                # if note.pitch not in midi_score_pitches:
+                #     continue
+
+                pitch = note.pitch
+                velocity = note.velocity
+
+                onset = max(note.start, start) - start 
+                offset = min(note.end, end) - start 
+
+                if offset - onset < eps:
+                    # We don't want those noisy artifacts
+                    continue
+
+                note_events.append([onset, offset, pitch, velocity])
+    
+    # Get the tempo changes    
+    return np.array(note_events)
+
 
 
 def get_midi_note_events_strict(midi: pretty_midi.PrettyMIDI, start: float, end: float) -> np.ndarray:
@@ -1143,6 +1466,11 @@ def get_midi_note_events_strict(midi: pretty_midi.PrettyMIDI, start: float, end:
 
                 # neglect note durations which are about 50ms close to the
                 # end of the segment (it is unlikely to be captured in the audio properly) 
+                # commented below because for the MIDI to score process, we might have to go through
+                # these files manually....and ensure it aligns with the score. We just have to do it
+                # Audio to MIDI is fine...although we might want to remove artifacts at the end also
+                # We will discuss about it. We have no choice if we want this to be perfect
+                # comment below for the final dataset generation
                 if end - note.start < 0.05:
                     continue
 
@@ -1151,7 +1479,7 @@ def get_midi_note_events_strict(midi: pretty_midi.PrettyMIDI, start: float, end:
                 # Need to deal with the case where the note starts before
                 # the start of the segment and ends after the end of the segment
                 # Not sure if what I have done below is the right thing to do
-                note_events.append([note.start - start, min(note.end - start, end - start), pitch, note.velocity])
+                note_events.append([max(0, note.start - start), min(note.end - start, end - start), pitch, note.velocity])
 
     # Get the tempo changes    
     return np.array(note_events)
@@ -1322,7 +1650,6 @@ def merge_midi(midi_in: str, midi_out: str):
 # ==============================
 # Section 9: Tokenization utils.
 # ==============================
-
 # Credits: `https://github.com/TimFelixBeyer/ScoreTransformer/blob/main/score_transformer/tokenizer/score_to_tokens.py`
 def attributes_to_tokens(attributes, staff=None):
     """tokenize 'attributes' section in MusicXML"""
