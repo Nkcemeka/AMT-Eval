@@ -8,7 +8,6 @@ from pathlib import Path
 import shutil
 import json
 
-
 CURRENT_DIR = Path(__file__).resolve().parent
 MIDI_EXAMPLES_DIR = CURRENT_DIR / "./data/midi_examples/pred_midi"
 STORE_DIR = CURRENT_DIR / "dash_app/assets"
