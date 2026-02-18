@@ -139,6 +139,7 @@ def selection_handler(changes, _, selections):
     # if yes, add them
     if changes:
         for key, val in changes.items():
+            print(key)
             selections[key] = val
 
     return selections

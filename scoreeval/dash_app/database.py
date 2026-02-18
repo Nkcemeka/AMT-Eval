@@ -212,14 +212,25 @@ def load_responses(user_id: str):
         sel_dict = {}
 
         # Extract questions and responses for user_id in question
-        q_db = session.query(Question).order_by(Question.id).all()
+        # q_db = session.query(Question).order_by(Question.id).all()
+        user = session.get(User, user_id)
+
+        # If questions are already assigned for this user, just load and return
+        if user.assigned_questions:
+            q_list =  [
+                question_to_dict(each) for each in user.assigned_questions
+            ]
+        else:
+            # if no assigned questions, raise error; user should
+            raise RuntimeError(f"User {user_id} should have assigned questions!")
+        
         response_db = session.query(Response).filter_by(user_id=user_id).all()
         r_map = {
             r.question_id: r.choice for r in response_db
         }
 
-        for i, each in enumerate(q_db):
-            selection = r_map.get(each.id, None)
+        for i, each in enumerate(q_list):
+            selection = r_map.get(each["id"], None)
             if selection is not None:
                 sel_dict[str(i)] = json.loads(selection)
         return sel_dict
@@ -250,11 +261,15 @@ def add_response(response_dict: dict, user_id: str):
     # Connect to the database
     # Create a session
     session = SessionLocal()
-    q_db = session.query(Question).order_by(Question.id).all()
-    q_list = []
-    for i, each in enumerate(q_db):
-            q_dict = question_to_dict(each)
-            q_list.append(q_dict)
+    user = session.get(User, user_id)
+
+    # If questions are already assigned for this user, just load and return
+    if user.assigned_questions:
+        q_list =  [
+            question_to_dict(each) for each in user.assigned_questions
+        ]
+    else:
+        raise RuntimeError("User not assigned questions yet!")
 
     for key in response_dict.keys():
         key_int = int(key)

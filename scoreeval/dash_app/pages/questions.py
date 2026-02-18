@@ -140,7 +140,7 @@ def go_to_next_question(n_clicks_front_ts, n_clicks_back_ts, current_idx,\
         print("LQ_SBBBB", lq_db)
         if lq_db == -1:
             lq_db = 0
-
+        
         if lq_db == len(questions) - 1:
             next_btn_str = "Submit"
         else:
@@ -303,6 +303,7 @@ def update_question(idx, selections, questions, order, prev_q):
     audio_trans_paths = sorted(audio_trans_paths, key=lambda x: order[idx][audio_trans_paths.index(x)])
     midi_comps = midi_comp_layout()
     score_comps = score_comp_layout()
+
     if str(idx) in selections:
         # if the user has already selected an option before,
         # simply load the state
