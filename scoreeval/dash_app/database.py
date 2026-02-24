@@ -17,6 +17,9 @@ from typing import Optional
 # Get the path of this file
 FILE_PATH = Path(__file__).resolve().parent
 
+USERS_PER_QUESTION = 10
+NUM_QUESTIONS = 12
+
 with open(FILE_PATH / "assets/questions.json", "r") as f:
     questions = json.load(f)["questions"]
 
@@ -78,7 +81,7 @@ class QuestionAssignment(Base):
 
 def trigger(engine):
     with engine.connect() as conn:
-        conn.execute(text("""
+        conn.execute(text(f"""
             CREATE TRIGGER IF NOT EXISTS limit_users_per_question
             BEFORE INSERT ON question_assignments
             BEGIN
@@ -88,8 +91,8 @@ def trigger(engine):
                             SELECT COUNT(*)
                             FROM question_assignments
                             WHERE question_id = NEW.question_id
-                        ) >= 4
-                        THEN RAISE(ABORT, 'A question cannot have more than 4 users')
+                        ) >= {USERS_PER_QUESTION}
+                        THEN RAISE(ABORT, 'A question cannot have more than {USERS_PER_QUESTION} users')
                     END;
             END;
         """))
@@ -108,7 +111,7 @@ def question_to_dict(q):
         'bTrans_audio': q.bTrans_audio
     }
 
-def load_questions2(user_id: str, NUM_QUESTIONS: int=10):
+def load_questions2(user_id: str, NUM_QUESTIONS: int=NUM_QUESTIONS):
     """ 
         This loads the questions for a given user_id.
         If a user has not been assigned a set of questions, 
@@ -136,7 +139,7 @@ def load_questions2(user_id: str, NUM_QUESTIONS: int=10):
         # Otherwise, assign questions to user and load them
         q_db = session.query(Question).outerjoin(\
             QuestionAssignment).group_by(Question.id).having(func.count(\
-            QuestionAssignment.user_id) < 4).order_by(func.random(), Question.type).all()
+            QuestionAssignment.user_id) < USERS_PER_QUESTION).order_by(func.random(), Question.type).all()
         
         for i, each in enumerate(q_db):
             # we shouldn't get into this if condition ideally,
@@ -222,7 +225,8 @@ def load_responses(user_id: str):
             ]
         else:
             # if no assigned questions, raise error; user should
-            raise RuntimeError(f"User {user_id} should have assigned questions!")
+            #raise RuntimeError(f"User {user_id} should have assigned questions!")
+            return {}
         
         response_db = session.query(Response).filter_by(user_id=user_id).all()
         r_map = {

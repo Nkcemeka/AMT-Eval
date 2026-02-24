@@ -18,8 +18,9 @@ Note that the <i>ts</i> option represents test split. There are two options for 
 To generate example pairs for the user study, run the following:
 
 ```
-python examples.py
+python examples.py -m 1
 ```
+The -m flag set to 1 means <i>"generate examples for MIDI"</i>. If it is 0, it means generate score-based examples. Note that for MIDI, the generated examples are based on the hFT-Transformer model by Sony and Onsets and Frames from Google, and are both trained on the MAPS dataset.
 
 To run this as a background process, run the bash script and view the logs:
 

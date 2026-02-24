@@ -23,7 +23,7 @@ layout = html.Div(
 def load_output(n):
     out_div = html.Div(children=[
         html.H1(id="welcome", children="Welcome!"),
-    html.P("Please read the instructions before attempting the questionnaire."),
+    html.P("Please read the instructions before attempting the questionnaire.", style={"font-size": "large"}),
 
     dbc.Row([
         dbc.Col([
@@ -31,13 +31,13 @@ def load_output(n):
                 "background-color": "#003366",   # dark blue
                 "border-color": "#003366",
                 "color": "white"
-            }), href="/instructions", style={"margin": "8px"}),
+            }, size="lg"), href="/instructions", style={"margin": "8px"}),
 
-            dcc.Link(dbc.Button("Proceed with questions", id="start-btn", style={
-                "background-color": "#003366",   # dark blue
-                "border-color": "#003366",
-                "color": "white"
-            }), href="/questions", style={"margin": "8px"})
+            # dcc.Link(dbc.Button("Proceed with questions", id="start-btn", style={
+            #     "background-color": "#003366",   # dark blue
+            #     "border-color": "#003366",
+            #     "color": "white"
+            # }), href="/questions", style={"margin": "8px"})
         ], align="center")
     ]),
     ])

@@ -30,13 +30,13 @@ layout = html.Div(
         html.Div(
                 children=[dbc.Progress(id="progress-bar", color="success", className="mb-3", \
                              value=0, striped=True, animated=True, \
-                            style={"height": "30px", "width": "100%"}),
+                            style={"height": "1.875rem", "width": "100%"}),
                         ],
-                style={"width": "50%", "text-align": "center", "margin": "auto", "padding-top": "20px"}
+                style={"width": "50%", "text-align": "center", "margin": "auto", "padding-top": "1.25rem"}
         ),
         
-        html.Div(id="audio-div"),
-        html.Div(id="comparison-div", style={"width": "95%", "margin": "auto"},
+        html.Div(id="audio-div", style={"width": "100%", "padding": "1.2rem"}),
+        html.Div(id="comparison-div", style={"width": "100%", "padding": "1.2rem"},
             children=[
                     # Images and Radio Question
                     html.H3("Transcriptions:"),
@@ -346,13 +346,14 @@ def update_question(idx, selections, questions, order, prev_q):
 # Callback for progress bar
 @callback(
     Output("progress-bar", "value"),
+    Output("progress-bar", "label"),
     Input("current-question", "data"),
     State("questions", "data")
 )
 def update_progress(idx, questions):
     total = len(questions)
     progress = int((idx + 1) / total * 100)
-    return progress
+    return progress, f"{progress}%"
 
 # Callback for Modal Warning
 @callback(

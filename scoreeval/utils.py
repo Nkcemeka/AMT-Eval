@@ -482,7 +482,7 @@ def musescore_convert_img(input_path: str, output_path: str):
             env=evs
         )
 
-        img_files = glob.glob(f"{tmpdir}/temp-*.png")
+        img_files = sorted(glob.glob(f"{tmpdir}/temp-*.png"))
         concatenate_images(filenames=img_files, out=output_path, concat_mode="vertical")
 
 # ============================================

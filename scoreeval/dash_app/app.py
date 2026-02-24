@@ -21,7 +21,9 @@ server = Flask(__name__)
 
 # Instantiate Dash app.
 app = Dash(__name__, server=server, external_stylesheets=[dbc.themes.BOOTSTRAP], \
-        use_pages=True, suppress_callback_exceptions=True)
+        use_pages=True, suppress_callback_exceptions=True, meta_tags=[
+        {"name": "viewport", "content": "width=device-width, initial-scale=1"}
+    ])
 
 # Updating the Flask Server configuration with Secret Key to encrypt the user session cookie
 server.config.update(SECRET_KEY=os.getenv("SECRET_KEY"))
@@ -52,6 +54,7 @@ app.layout = html.Div(
         dcc.Store(id='questions', data=[], storage_type="session"),
         dcc.Store(id='user-id', data='', storage_type="session"),
         dcc.Store(id='order', data='', storage_type="session"),
+        dcc.Store(id='seen-instructions', data=False, storage_type="session"),
         dcc.Store(id="dummy", data=''),
         dcc.Store(id='button-clicked', data=0), # tracks if next/back button was clicked on questions page
         dcc.Store(id="current-question", data=-1, storage_type="session"),
@@ -186,6 +189,15 @@ def gen_order(questions):
     finally:
         session.close()
 
+
+@app.callback(
+    Output('seen-instructions', 'data'),
+    Input('url', "pathname"),
+)
+def update_nav_instruct(page):
+    if page == "/questions" and current_user.is_authenticated:
+        return True
+
 # Router callback to deal with
 # navigation issues
 @app.callback(
@@ -195,8 +207,9 @@ def gen_order(questions):
     Input("url", "pathname"),
     Input("init-login", "data"),
     Input("finished", "data"),
+    State('seen-instructions', 'data'),
 )
-def router(page, _, finished: bool):
+def router(page, _, finished: bool, seen_flag: bool):
     # if user is not authenticated and we are not on the signup
     # page, we go to Login
     if not current_user.is_authenticated and page != "/signup":
@@ -209,6 +222,17 @@ def router(page, _, finished: bool):
                 dbc.NavItem(dbc.NavLink("Questions", href="/questions")),
                 dbc.NavItem(dbc.NavLink("Logout", href="/logout")),
             ]
+
+    home_logout_nav = [
+                dbc.NavItem(dbc.NavLink("Home", href="/")),
+                dbc.NavItem(dbc.NavLink("Logout", href="/logout")),
+            ]
+    
+    home_inst_logout_nav = [
+                dbc.NavItem(dbc.NavLink("Home", href="/")),
+                dbc.NavItem(dbc.NavLink("Instructions", href="/instructions")),
+                dbc.NavItem(dbc.NavLink("Logout", href="/logout")),
+    ]
     
     thankyou_nav = [
         dbc.NavItem(dbc.NavLink("Logout", href="/logout")),
@@ -219,7 +243,7 @@ def router(page, _, finished: bool):
                         className="nav-hover", id="nav-login")),], ""
     
     if page == "/login" and current_user.is_authenticated:
-        return "/", fullnav, "User Study"
+        return "/", home_logout_nav, "User Study"
     
     if page == "/logout" and current_user.is_authenticated:
         logout_user()
@@ -231,7 +255,15 @@ def router(page, _, finished: bool):
     if finished:
         return "/thanks", thankyou_nav, "User Study"
     
-    return dash.no_update, fullnav, "User Study"
+    if page=="/questions" and current_user.is_authenticated:
+        if seen_flag:
+            return dash.no_update, fullnav, "User Study"
+        return dash.no_update, home_inst_logout_nav, "User Study"
+
+    if page=="/instructions" and seen_flag and current_user.is_authenticated:
+            return dash.no_update, fullnav, "User Study"
+    
+    return dash.no_update, home_logout_nav, "User Study"
 
 
 @app.callback(
