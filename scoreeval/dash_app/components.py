@@ -14,8 +14,8 @@ TOOLTIP_TEXT_MIDI = {
     "Faithfulness to Ref. Audio": "Overall faithfulness to the reference audio.",
     "Draft": "This indicates what MIDI transcription you would prefer as a starting point for your work.",
     "Pitch": "Pitch content of the transcriptions relative to the reference.",
-    "Rhythm": "What MIDI transcription is better at capturing the essential rhythmic performance or structure of the piece.",
-    "Harmony": "This targets notes played simultaneously and their progress with time. Consider completeness versus added material",
+    "Rhythm": "Transcription preference in terms of rhythm relative to the reference.",
+    "Harmony": "Accuracy in terms of notes played simultaneously.",
 }
 
 TOOLTIP_TEXT_SCORE = {
@@ -199,18 +199,18 @@ def midi_comp_layout():
     midi_comps = []
     for idx, item in enumerate(midi_list_comps):
         if idx == 0: # idx 0 is Draft
-            midi_comps.append(html.H4("Select which transcription you prefer as a starting draft.", \
+            midi_comps.append(html.H5("Select which transcription you prefer as a starting draft.", \
                                 ))
             midi_comps.append(html.Hr(style={'border': '1px solid', "borderColor": "#000000", "opacity": "unset"}))
             midi_comps.append(item)
             #midi_comps.append(html.Hr(style={'border': '1px solid', 'width': '50%', 'margin-bottom': '0px', \
             #                                 'margin-top': "20px", "borderColor": "#000000", "opacity": "unset"})),
-            midi_comps.append(html.H4("How difficult was it to make a selection?"))
+            midi_comps.append(html.H5("How difficult was it to make a selection?"))
             midi_comps.append(html.Hr(style={}, className="likert-hr")),
             midi_comps.append(likert_component("likert-midi-draft"))
             continue
         elif idx == 1:
-            midi_comps.append(html.H4("Select which transcription you prefer in each of the following dimensions.", \
+            midi_comps.append(html.H5("Select which transcription you prefer in each of the following dimensions.", \
                                 style={"margin-top": "3.75rem"}))
             midi_comps.append(html.Hr(style={'border': '1px solid', "borderColor": "#000000", "opacity": "unset"}))
             midi_comps.append(item)
@@ -219,7 +219,7 @@ def midi_comp_layout():
             midi_comps.append(item)
             #midi_comps.append(html.Hr(style={'border': '1px solid', 'width': '50%', 'margin-bottom': '0px', \
             #                                 'margin-top': "20px", "borderColor": "#000000", "opacity": "unset"})),
-            midi_comps.append(html.H4("How difficult was it to make your selection?"))
+            midi_comps.append(html.H5("How difficult was it to make your selection?"))
             midi_comps.append(html.Hr(style={}, className="likert-hr")),
             midi_comps.append(likert_component("likert-midi-trans"))
         else:
@@ -233,18 +233,18 @@ def score_comp_layout():
     score_comps = []
     for idx, item in enumerate(score_list_comps):
         if idx == 0: # idx 0 is Draft
-            score_comps.append(html.H4("Select which transcription you prefer as a starting draft.", \
+            score_comps.append(html.H5("Select which transcription you prefer as a starting draft.", \
                                 ))
             score_comps.append(html.Hr(style={'border': '1px solid', "borderColor": "#000000", "opacity": "unset"}))
             score_comps.append(item)
             #score_comps.append(html.Hr(style={'border': '1px solid', 'width': '50%', 'margin-bottom': '0px', \
             #                                 'margin-top': "20px", "borderColor": "#000000", "opacity": "unset"})),
-            score_comps.append(html.H4("How difficult was it to make a selection?"))
+            score_comps.append(html.H5("How difficult was it to make a selection?"))
             score_comps.append(html.Hr(style={}, className="likert-hr")),
             score_comps.append(likert_component("likert-score-draft"))
             continue
         elif idx == 1:
-            score_comps.append(html.H4("Select which transcription you prefer in each of the following dimensions.", \
+            score_comps.append(html.H5("Select which transcription you prefer in each of the following dimensions.", \
                                 style={ "margin-top": "3.75rem"}))
             score_comps.append(html.Hr(style={'border': '1px solid', "borderColor": "#000000", "opacity": "unset"}))
             score_comps.append(item)
@@ -253,7 +253,7 @@ def score_comp_layout():
             #score_comps.append(html.Hr(style={'border': '1px solid', 'width': '50%', 'margin-bottom': '0px', \
             #                                 'margin-top': "20px", "borderColor": "#000000", "opacity": "unset"})),
             score_comps.append(item)
-            score_comps.append(html.H4("How difficult was it to make your selections?"))
+            score_comps.append(html.H5("How difficult was it to make your selections?"))
             score_comps.append(html.Hr(style={}, className="likert-hr")),
             score_comps.append(likert_component("likert-score-trans"))
         else:

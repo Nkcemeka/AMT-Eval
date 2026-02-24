@@ -197,6 +197,7 @@ def gen_order(questions):
 def update_nav_instruct(page):
     if page == "/questions" and current_user.is_authenticated:
         return True
+    return dash.no_update
 
 # Router callback to deal with
 # navigation issues
@@ -260,8 +261,10 @@ def router(page, _, finished: bool, seen_flag: bool):
             return dash.no_update, fullnav, "User Study"
         return dash.no_update, home_inst_logout_nav, "User Study"
 
-    if page=="/instructions" and seen_flag and current_user.is_authenticated:
+    if page=="/instructions" and current_user.is_authenticated:
+        if seen_flag:
             return dash.no_update, fullnav, "User Study"
+        return dash.no_update, home_logout_nav, "User Study"
     
     return dash.no_update, home_logout_nav, "User Study"
 
