@@ -760,8 +760,8 @@ if __name__ == "__main__":
     if int(args.m):
         ex = ExMidiBasic(model1='hft', model2='oaf')
         ex.gen_examples()
-        ex.sample("./data/midi_examples/examples.json", NUM_EXAMPLES=150)
+        ex.sample("./data/midi_examples/examples.json", NUM_EXAMPLES=500)
     else:
         ex = ExScore()
         ex.gen_examples()
-        ex.sample("data/score_examples/output.xlsx", NUM_EXAMPLES=150)
+        ex.sample("data/score_examples/output.xlsx", NUM_EXAMPLES=500)

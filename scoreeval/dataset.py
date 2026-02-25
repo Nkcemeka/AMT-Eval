@@ -566,8 +566,10 @@ class ASAPDataset:
                     421, 443, 445, 447]
         elif self.ts == "beyer":
             TEST_PIECE_IDS = [15, 78, 159, 172, 254, 288, 322, 374, 395, 399, 411, 418, 452, 478]
+        elif self.ts == "beyer_filtered":
+            TEST_PIECE_IDS = [15, 159, 172, 254, 288, 322, 374, 395, 399, 411, 418, 452, 478]
         else:
-            raise ValueError("Unknown test split. Available options are: `maestro` and `beyer`")
+            raise ValueError("Unknown test split. Available options are: `maestro`, `beyer_filtered` and `beyer`")
 
         data = pd.concat([real_data, synth_data])
 

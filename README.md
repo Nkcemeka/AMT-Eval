@@ -12,7 +12,8 @@ annotations. We extract these set of quadruplets on a measure level (4 measures)
 ```
 python dataset.py -nm 4 -p ASAP_DATASET_PATH -o data -ts maestro
 ```
-Note that the <i>ts</i> option represents test split. There are two options for this: <b>maestro</b> and <b>beyer</b>. Use <i>maestro</i> to use the entire ASAP dataset and use <i>beyer</i> to use the test split of [this paper](https://arxiv.org/pdf/2410.00210).
+Note that the <i>ts</i> option represents test split. There are three options for this: <b>maestro</b>, <b>beyer_filtered</b> and <b>beyer</b>. Use <i>maestro</i> to use the test set of the MAESTRO dataset, <i>beyer_filtered</i> to use the filtered option of beyer and use <i>beyer</i> to use the test split of [this paper](https://arxiv.org/pdf/2410.00210). Note that for <b>beyer_filtered</b>, we 
+filter the test IDs so they don't contain any sample listed in the training dataset for Nakamura which was used to train the metrical HMMs. See [here for list of training samples](https://anonymous4721029.github.io/algorithms.html).
 
 # Examples Generation
 To generate example pairs for the user study, run the following:
