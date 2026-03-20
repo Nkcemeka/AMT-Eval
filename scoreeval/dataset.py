@@ -8,9 +8,14 @@ import music21 as m21
 import pretty_midi
 import pandas as pd
 import numpy as np
-from utils import get_midi_note_events_strict, get_midi_note_events_strict2, get_tempo_changes, get_ksig_changes, \
-            get_tsig_changes, get_xml_score, remove_broken_ties, midi2audio
+from utils import get_midi_note_events_strict, get_tempo_changes, get_ksig_changes, \
+            get_tsig_changes, get_xml_score, remove_broken_ties, midi2audio, get_aligned_midi_from_score, \
+            get_pedal_events_strict, get_deletions, get_xml_score_del, \
+            get_performance
 
+# ================================
+# Section: Dataset Class for ASAP
+# ================================
 class ASAPDataset:
     """
         Works for all datasets that follow the
@@ -28,20 +33,23 @@ class ASAPDataset:
                 store_dir (str): Directory to store data
                 test_split (str): Use "maestro" or "beyer's" test split. Default is MAESTRO.
         """
-        self.asap_path = asap_path
+        self.asap_path = asap_path # oath to asap dataset
+
+        # load asap annotations
         self.asap_annots = json.load(open(Path(self.asap_path) / "asap-dataset/asap_annotations.json"))
-        self.ts = test_split
+        self.ts = test_split # test split we are using
         _, _, test = self.get_train_val_test_asap()
 
-        main_rhythm_dict = {}
+        #main_rhythm_dict = {}
         for test_sample in test:
             filename = test_sample[1]
             print(f"Processing {filename}...")
-            main_rhythm_dict.update(self.window_view(filename, num_measures=num_measures, store_dir=store_dir))
+            self.window_view(filename, num_measures=num_measures, store_dir=store_dir)
+            #main_rhythm_dict.update(self.window_view(filename, num_measures=num_measures, store_dir=store_dir))
         
         # save the tempos dict to a json file
-        with open(Path(store_dir) / "rhythm_metadata.json", "w") as f:
-            json.dump(main_rhythm_dict, f)
+        # with open(Path(store_dir) / "rhythm_metadata.json", "w") as f:
+        #     json.dump(main_rhythm_dict, f)
 
     def map_test_to_maestro(self, maestro_path: str, ext_midi: str,\
             ext_audio: str, maestro_csv="maestro-v2.0.0.csv") -> dict:
@@ -336,7 +344,7 @@ class ASAPDataset:
         Path(store_dir).mkdir(parents=True, exist_ok=True)
 
         # Create audio, midi, midi_score, xml_score directories in store_dir
-        for subdir in ["audio", "midi", "midi_score", "xml_score"]:
+        for subdir in ["audio", "midi", "midi_score", "xml_score", "audio_score", "pmidi"]:
             subdir_path = Path(store_dir) / subdir
             Path(subdir_path).mkdir(parents=True, exist_ok=True)
 
@@ -409,11 +417,11 @@ class ASAPDataset:
         assert Path(midi_score_file).exists(), f"MIDI score file {midi_score_file} does not exist"
         assert Path(xml_score_file).exists(), f"XML score file {xml_score_file} does not exist"
 
-        #audio = librosa.load(audio_file, sr=16000)[0]
+        audio = librosa.load(audio_file, sr=16000)[0]
         midi = pretty_midi.PrettyMIDI(str(midi_file))
         midi_score = pretty_midi.PrettyMIDI(str(midi_score_file))
         score_xml = m21.converter.parse(str(xml_score_file))
-        rhythm_dict = {} # (audio_id[Key], (tempo, ts)); value is tempo and time signature
+        #rhythm_dict = {} # (audio_id[Key], (tempo, ts)); value is tempo and time signature
 
         for key in mhashmap.keys():
             measure_num_start = mhashmap[key]['measure_number_start']
@@ -426,15 +434,16 @@ class ASAPDataset:
             send = mhashmap[key]['send']
             ks = mhashmap[key]['key_signature']
             ts = mhashmap[key]['time_signature']
-            try:
-                tempos = self.get_tempos(ts, pstart, pend)
-            except:
-                # if the time signature is not the same for given
-                # number of measures, skip it
+
+            if not self.check_constant_ts(ts):
+                # Time signature should be constant
+                # across measures under consideration???
+                # why am I doing this by the way? Is it necessary???
                 continue
 
             # Get MIDI score segment
-            midi_score_segment = get_midi_note_events_strict2(midi_score, midi_score, sstart, send)
+            #midi_score_segment = get_midi_note_events_strict2(midi_score, midi_score, sstart, send)
+            midi_score_segment = get_midi_note_events_strict(midi_score, sstart, send)
             midi_seg_tempo_changes = get_tempo_changes(midi_score, sstart, send)
             midi_seg_ts_changes = get_tsig_changes(midi_score, sstart, send)
             midi_seg_ks_changes = get_ksig_changes(midi_score, sstart, send)
@@ -465,27 +474,44 @@ class ASAPDataset:
             midi_score_segment.time_signature_changes = midi_seg_ts_changes
             midi_score_segment.key_signature_changes = midi_seg_ks_changes
 
-            # Get MIDI segment
-            #midi_segment = get_midi_note_events_strict(midi, pstart, pend)
-            midi_segment = get_midi_note_events_strict2(midi, midi_score_segment, pstart, pend)
-            midi_segment = self.gen_midi_from_notes(midi_segment)
-
-            # Get audio segment
-            audio_segment = midi2audio(midi_segment, fs=16000, \
-                sf2_path="/home/nkcemeka/Documents/snap/snap2midi/notebooks/soundfonts/MuseScore_General.sf2" )
-            # audio_start_sample = int(round(pstart * 16000))
-            # audio_end_sample = int(round(pend * 16000))
-            # audio_segment = audio[audio_start_sample:audio_end_sample]
+            tempos = midi_score_segment.get_tempo_changes()[1].tolist()
 
             # Get XML score segment
             score_xml_segment = get_xml_score(score_xml, measure_num_list, ks, ts, tempos)
 
+            # Get MIDI segment
+            #midi_segment = get_midi_note_events_strict(midi, pstart, pend)
+            # midi_segment = get_midi_note_events_strict2(midi, midi_score_segment, pstart, pend)
+            #midi_segment = get_aligned_midi(midi, midi_score_segment, pstart, pend)
+
+            # This is the MIDI segement that corresponds to score
+            try:
+                midi_segment = get_aligned_midi_from_score(midi, score_xml_segment, pstart, pend)
+            except:
+                continue
+            midi_segment = self.gen_midi_from_notes(midi_segment)
+            audio_score_segment = midi2audio(midi_segment, fs=16000, \
+                sf2_path="/home/nkcemeka/Documents/snap/snap2midi/notebooks/soundfonts/MuseScore_General.sf2" )
+            
+            # Get the actual performance MIDI without filtering
+            pmidi_segment = get_midi_note_events_strict(midi, pstart, pend)
+            pmidi_segment = self.gen_midi_from_notes(pmidi_segment)
+
+            # Get audio segment
+            #audio_segment = midi2audio(midi_segment, fs=16000, \
+            #    sf2_path="/home/nkcemeka/Documents/snap/snap2midi/notebooks/soundfonts/MuseScore_General.sf2" )
+            audio_start_sample = int(round(pstart * 16000))
+            audio_end_sample = int(round(pend * 16000))
+            audio_segment = audio[audio_start_sample:audio_end_sample]
+
             # Save the segments to files
             audio_store_path = Path(store_dir) / "audio" / f"{Path(filename).stem}_m{measure_num_start}.wav"
+            audio_score_store_path = Path(store_dir) / "audio_score" / f"{Path(filename).stem}_m{measure_num_start}.wav"
             midi_store_path = Path(store_dir) / "midi" / f"{Path(filename).stem}_m{measure_num_start}.mid"
+            pmidi_store_path = Path(store_dir) / "pmidi" / f"{Path(filename).stem}_m{measure_num_start}.mid"
             midi_score_store_path = Path(store_dir) / "midi_score" / f"{Path(filename).stem}_m{measure_num_start}.mid"
             xml_score_store_path = Path(store_dir) / "xml_score" / f"{Path(filename).stem}_m{measure_num_start}.musicxml"
-            rhythm_dict[f"{Path(filename).stem}_m{measure_num_start}"] = (tempos[0], ts[0])
+            #rhythm_dict[f"{Path(filename).stem}_m{measure_num_start}"] = (tempos[0], ts[0])
 
             # Save audio
             try:
@@ -496,10 +522,18 @@ class ASAPDataset:
                 continue
 
             sf.write(str(audio_store_path), audio_segment, 16000)
+            sf.write(str(audio_score_store_path), audio_score_segment, 16000)
             midi_segment.write(str(midi_store_path))
+            pmidi_segment.write(str(pmidi_store_path))
             midi_score_segment.write(str(midi_score_store_path))
         
-        return rhythm_dict
+        # return rhythm_dict
+    
+    def check_constant_ts(self, ts):
+        ts_set = set([item[1] for item in ts])
+        if len(ts_set) != 1:
+            return False 
+        return True
     
     def get_tempos(self, ts, start, end):
         # I think the annotations give us the right number of beats
@@ -645,28 +679,684 @@ class ASAPDataset:
                 assert Path(midi_score_file).exists(), f"{midi_score_file} does not exist in {name} set"
                 assert Path(xml_score_file).exists(), f"{xml_score_file} does not exist in {name} set"
         return train_data_final, val_data_final, test_data_final
+    
+
+# =====================================================================
+# Section: Dataset Class for ASAP that generates aligned audio and MIDI
+# ======================================================================
+class ASAPMidiDataset(ASAPDataset):
+    def __init__(self, asap_path = "/home/nkcemeka/Documents/Datasets/ASAP", \
+        num_measures=2, store_dir = "./data", test_split = "maestro"):
+        super().__init__(asap_path, num_measures, store_dir, test_split)
+
+    def window_view(self, filename, num_measures = 2, store_dir = "./data"):
+        # Create store directory if it does not exist
+        Path(store_dir).mkdir(parents=True, exist_ok=True)
+
+        # Create audio & pmidi directories in store_dir
+        for subdir in ["audio", "pmidi"]:
+            subdir_path = Path(store_dir) / subdir
+            Path(subdir_path).mkdir(parents=True, exist_ok=True)
+
+        annots = self.asap_annots[filename.replace(str(Path(self.asap_path) / "asap-dataset/") + "/", "")]
+        perf_db = annots["performance_downbeats"] # performance downbeats in seconds
+        mscore_db = annots["midi_score_downbeats"] # midi score downbeats in seconds
+        score_map = annots["downbeats_score_map"] # maps midi score downbeats to XML measures
+
+        # key is 'm{i}' where i is measure number
+        # value is a dict with keys 'pstart' and 'pend' giving performance start and end times in seconds
+        # 'sstart' and 'send' giving score start and end times in seconds
+        # 'measure_number' giving the measure number in the score
+        mhashmap = {} 
+        assert len(perf_db) == len(mscore_db) == len(score_map), f"Length mismatch in downbeats and score map"
+        num_db = len(perf_db)
+        
+        for i in range(0, num_db - num_measures, num_measures):
+            # We will use a two pointer approach to build the hashmap
+            j = i + num_measures - 1 # num_measures determines how much measures we consider in one window
+
+            # init the measure entry
+            if isinstance(score_map[i], str) or isinstance(score_map[j], str):
+                # We don't want to deal with this
+                # weird edge case
+                continue
+                
+            mhashmap[f'm{i+1}'] = {} # m(db) for the key where db is downbeat index
+
+            # measure number start
+            mhashmap[f'm{i+1}']['measure_number_start'] = int(score_map[i]) + 1 # +1 to convert from 0-indexed to 1-indexed
+
+            # performance start and end times
+            mhashmap[f'm{i+1}']['pstart'] = float(perf_db[i])
+            mhashmap[f'm{i+1}']['pend'] = float(perf_db[j+1])
+
+        # Now that we are done building the hashmap, we generate the audio and pmidi files
+        audio_file = filename.replace(".mid", ".wav")
+        midi_file = filename
+
+        assert Path(audio_file).exists(), f"Audio file {audio_file} does not exist"
+        assert Path(midi_file).exists(), f"MIDI file {midi_file} does not exist"
+
+        audio = librosa.load(audio_file, sr=16000)[0]
+        midi = pretty_midi.PrettyMIDI(str(midi_file))
+
+        for key in mhashmap.keys():
+            measure_num_start = mhashmap[key]['measure_number_start']
+
+            pstart = mhashmap[key]['pstart']
+            pend = mhashmap[key]['pend']
+
+            if pend - pstart < 5:
+                # skip segments that are less than 5 seconds
+                continue
+            
+            # Get the actual performance MIDI without filtering
+            pmidi_segment = get_midi_note_events_strict(midi, pstart, pend)
+            pmidi_segment = self.gen_midi_from_notes(pmidi_segment)
+
+            # Get audio segment
+            audio_start_sample = int(round(pstart * 16000))
+            audio_end_sample = int(round(pend * 16000))
+            audio_segment = audio[audio_start_sample:audio_end_sample]
+            audio_segment /= np.abs(audio_segment).max()
+            # Save the segments to files
+            audio_store_path = Path(store_dir) / "audio" / f"{Path(filename).stem}_m{measure_num_start}.wav"
+            pmidi_store_path = Path(store_dir) / "pmidi" / f"{Path(filename).stem}_m{measure_num_start}.mid"
+
+            sf.write(str(audio_store_path), audio_segment, 16000)
+            pmidi_segment.write(str(pmidi_store_path))
+
+# ====================================================================================
+# Section: Dataset Class for ASAP that generates aligned MIDI and Score (a lil buggy)
+# ====================================================================================
+class ASAPScoreDataset(ASAPDataset):
+    def __init__(self, asap_path = "/home/nkcemeka/Documents/Datasets/ASAP",\
+                 num_measures=2, store_dir = "./data", test_split = "maestro"):
+        super().__init__(asap_path, num_measures, store_dir, test_split)
+
+    def window_view(self, filename, num_measures = 2, store_dir = "./data"):
+        # Create store directory if it does not exist
+        Path(store_dir).mkdir(parents=True, exist_ok=True)
+
+        # Create audio, midi, midi_score, xml_score directories in store_dir
+        for subdir in ["midi", "midi_score", "xml_score", "audio_score"]:
+            subdir_path = Path(store_dir) / subdir
+            Path(subdir_path).mkdir(parents=True, exist_ok=True)
+
+        annots = self.asap_annots[filename.replace(str(Path(self.asap_path) / "asap-dataset/") + "/", "")]
+        perf_db = annots["performance_downbeats"] # performance downbeats in seconds
+        mscore_db = annots["midi_score_downbeats"] # midi score downbeats in seconds
+        score_map = annots["downbeats_score_map"] # maps midi score downbeats to XML measures
+        key_sig = annots["midi_score_key_signatures"] # key signature of the piece
+        time_sig = annots["midi_score_time_signatures"] # time signature of the piece
+
+        # Time signature for the midi_score should occur on a downbeat level
+        # This is an assumption but seems reasonable
+        # For time signatures, I am pretty confident it is always on a downbeat
+        time_sig_list = self.get_time_sig(time_sig, mscore_db)
+
+        # for key signatures, it occurs on a beat level
+        key_sig_list = self.get_key_sig(key_sig, mscore_db)
+
+        # key is 'm{i}' where i is measure number
+        # value is a dict with keys 'pstart' and 'pend' giving performance start and end times in seconds
+        # 'sstart' and 'send' giving score start and end times in seconds
+        # 'measure_number' giving the measure number in the score
+        mhashmap = {} 
+        assert len(perf_db) == len(mscore_db) == len(score_map), f"Length mismatch in downbeats and score map"
+        num_db = len(perf_db)
+        
+        for i in range(0, num_db - num_measures, num_measures):
+            # We will use a two pointer approach to build the hashmap
+            j = i + num_measures - 1 # num_measures determines how much measures we consider in one window
+
+            # init the measure entry
+            if isinstance(score_map[i], str) or isinstance(score_map[j], str):
+                # We don't want to deal with this
+                # weird edge case
+                continue
+                
+            mhashmap[f'm{i+1}'] = {} # m(db) for the key where db is downbeat index
+
+            # measure number start
+            mhashmap[f'm{i+1}']['measure_number_start'] = int(score_map[i]) + 1 # +1 to convert from 0-indexed to 1-indexed
+            # measure number end
+            mhashmap[f'm{i+1}']['measure_number_end'] = int(score_map[j]) + 1 # +1 to convert from 0-indexed to 1-indexed
+
+            # performance start and end times
+            mhashmap[f'm{i+1}']['pstart'] = float(perf_db[i])
+            mhashmap[f'm{i+1}']['pend'] = float(perf_db[j+1])
+
+            # score start and end times
+            mhashmap[f'm{i+1}']['sstart'] = float(mscore_db[i])
+            mhashmap[f'm{i+1}']['send'] = float(mscore_db[j+1])
+
+            # Store key and time signatures between i and j
+            for each in range(i, j+2):
+                if 'key_signature' not in mhashmap[f'm{i+1}']:
+                    mhashmap[f'm{i+1}']['key_signature'] = []
+                mhashmap[f'm{i+1}']['key_signature'].append(key_sig_list[each])
+            
+                if 'time_signature' not in mhashmap[f'm{i+1}']:
+                    mhashmap[f'm{i+1}']['time_signature'] = []
+                mhashmap[f'm{i+1}']['time_signature'].append(time_sig_list[each])
+
+        # Now that we are done building the hashmap, we generate the audio, midi, midi_score, and xml_score files
+        midi_file = filename
+        midi_score_file = Path(filename).parent / "midi_score.mid"
+        xml_score_file = Path(filename).parent / "xml_score.musicxml"
+
+        assert Path(midi_file).exists(), f"MIDI file {midi_file} does not exist"
+        assert Path(midi_score_file).exists(), f"MIDI score file {midi_score_file} does not exist"
+        assert Path(xml_score_file).exists(), f"XML score file {xml_score_file} does not exist"
+
+        midi = pretty_midi.PrettyMIDI(str(midi_file))
+        midi_score = pretty_midi.PrettyMIDI(str(midi_score_file))
+        score_xml = m21.converter.parse(str(xml_score_file))
+
+        for key in mhashmap.keys():
+            measure_num_start = mhashmap[key]['measure_number_start']
+            measure_num_end = mhashmap[key]['measure_number_end']
+            measure_num_list = [measure_num_start, measure_num_end]
+
+            pstart = mhashmap[key]['pstart']
+            pend = mhashmap[key]['pend']
+            sstart = mhashmap[key]['sstart']
+            send = mhashmap[key]['send']
+            ks = mhashmap[key]['key_signature']
+            ts = mhashmap[key]['time_signature']
+
+            if not self.check_constant_ts(ts):
+                # Time signature should be constant
+                # across measures under consideration???
+                # why am I doing this by the way? Is it necessary???
+                continue
+
+            if pend - pstart < 5:
+                # ignore segments less than 5s
+                continue
+
+            # Get MIDI score segment
+            midi_score_segment = get_midi_note_events_strict(midi_score, sstart, send)
+            midi_seg_tempo_changes = get_tempo_changes(midi_score, sstart, send)
+            midi_seg_ts_changes = get_tsig_changes(midi_score, sstart, send)
+            midi_seg_ks_changes = get_ksig_changes(midi_score, sstart, send)
+            midi_score_segment = self.gen_midi_from_notes(midi_score_segment)
+            midi_score_segment.resolution = midi_score.resolution # Update resolution
+
+            # Add tempo changes, key signature changes and time signature changes to new MIDI segment
+            tempo_time, tempi = midi_seg_tempo_changes
+
+            last_tick = 0
+            last_tick_scale = 60.0/(tempi[0].item() * midi_score_segment.resolution)
+            previous_time = 0.
+            midi_score_segment._tick_scales = [(last_tick, last_tick_scale)]
+
+            for i in range(1, len(tempo_time)):
+                # compute new tick position
+                tick = last_tick + (tempo_time[i].item() - previous_time)/last_tick_scale 
+                # Update tick scale
+                tick_scale = 60.0 / (tempi[i].item() * midi_score_segment.resolution)
+                # Don't add repeat tick scales
+                if tick_scale != last_tick_scale:
+                    midi_score_segment._tick_scales.append((int(round(tick)), tick_scale))
+                    previous_time = tempo_time[i].item()
+                    last_tick, last_tick_scale = tick, tick_scale
+
+            # Update tick to time mapping
+            midi_score_segment._update_tick_to_time(midi_score_segment._tick_scales[-1][0] + 1)
+            midi_score_segment.time_signature_changes = midi_seg_ts_changes
+            midi_score_segment.key_signature_changes = midi_seg_ks_changes
+
+            tempos = midi_score_segment.get_tempo_changes()[1].tolist()
+
+            # Get XML score segment
+            score_xml_segment = get_xml_score(score_xml, measure_num_list, ks, ts, tempos)
+
+            # Get MIDI segment
+            # This is the MIDI segement that corresponds to score
+            try:
+                midi_segment = get_aligned_midi_from_score(midi, score_xml_segment, pstart, pend)
+            except RuntimeError as e:
+                print(e)
+                continue
+            
+            midi_segment = self.gen_midi_from_notes(midi_segment)
+            # get pedal events in the window
+            pedal_events = get_pedal_events_strict(midi, pstart, pend)
+
+            # we should have one instrument in midi_segment
+            for time, value in pedal_events:
+                cc = pretty_midi.ControlChange(number=64, value=value, time=time)
+                midi_segment.instruments[0].control_changes.append(cc)
+
+            audio_score_segment = midi2audio(midi_segment, fs=16000, \
+                sf2_path="/home/nkcemeka/Documents/snap/snap2midi/notebooks/soundfonts/MuseScore_General.sf2" )
+
+            # Save the segments to files
+            audio_score_store_path = Path(store_dir) / "audio_score" / f"{Path(filename).stem}_m{measure_num_start}.wav"
+            midi_store_path = Path(store_dir) / "midi" / f"{Path(filename).stem}_m{measure_num_start}.mid"
+            midi_score_store_path = Path(store_dir) / "midi_score" / f"{Path(filename).stem}_m{measure_num_start}.mid"
+            xml_score_store_path = Path(store_dir) / "xml_score" / f"{Path(filename).stem}_m{measure_num_start}.musicxml"
+
+            # Save audio
+            try:
+                # If the score saves to fail for some reason, then skip
+                remove_broken_ties(score_xml_segment, str(xml_score_store_path)) # This function saves the file as well
+                #score_xml_segment.write('musicxml', fp=str(xml_score_store_path), makeNotation=True)
+            except:
+                continue
+
+            sf.write(str(audio_score_store_path), audio_score_segment, 16000)
+            midi_segment.write(str(midi_store_path))
+            midi_score_segment.write(str(midi_score_store_path))
 
 
+# =====================================================================
+# Section: Dataset Class for nASAP that generates aligned MIDI and Score
+# ======================================================================
+class NASAPScoreDataset(ASAPDataset):
+    """
+        Works for all datasets that follow the
+        ASAP Dataset structure.
+    """
+    def __init__(self, asap_path: str="/home/nkcemeka/Documents/Datasets/ASAP",
+                 num_measures=2, store_dir: str="./data", test_split: str="maestro") -> None:
+        """
+            Instantiate Dataset class!
+
+            Args:
+            -----
+                asap_path (str): Base path to asap dataset
+                num_measures (int): Number of measures to extract
+                store_dir (str): Directory to store data
+                test_split (str): Use "maestro" or "beyer's" test split. Default is MAESTRO.
+        """
+        self.asap_path = asap_path # oath to asap dataset
+
+        # load nasap annotations
+        self.asap_annots = json.load(open(Path(self.asap_path) / "nasap-dataset/asap_annotations.json"))
+        self.ts = test_split # test split we are using
+        _, _, test = self.get_train_val_test_nasap()
+
+        #main_rhythm_dict = {}
+        for test_sample in test:
+            filename = test_sample[0]
+            print(f"Processing {filename}...")
+            self.window_view(filename, num_measures=num_measures, store_dir=store_dir)
+    
+    def get_train_val_test_nasap(self, opts: bool = True) -> tuple[list, list, list]:
+        """ 
+            Parse the nASAP dataset and return train, val, test splits.
+            Credits: `https://github.com/TimFelixBeyer/asap-dataset`
+
+            Args:
+                opts (bool): Whether to remove items without performance audio.
+
+            Returns:
+                tuple[list, list, list]: train, val, test splits
+        """
+        # We are going to select five files from a dataset that has MIDI-XML pairs and compute the metrics on them.
+        # We will write a function to parse the ASAP dataset and return a list of (audio, score-midi, p-midi, xml) tuples.
+        ASAP_PATH = self.asap_path
+
+        # load the metadata (we will use Tim Beyer's approach)
+        real_data  = pd.read_csv(str(Path(ASAP_PATH) / "ACPAS/metadata_R.csv"))
+        synth_data = pd.read_csv(str(Path(ASAP_PATH) / "ACPAS/metadata_S.csv"))
+        asap_annots = self.asap_annots
+
+        UNALIGNED = set(
+            "{ASAP}/" + k 
+            for k, v in asap_annots.items()
+            if not v["score_and_performance_aligned"]
+        )
+
+        # SKIP contains files not parsable by music21
+        SKIP = set(
+            ["{ASAP}/Glinka/The_Lark/Denisova10M.mid", "{ASAP}/Glinka/The_Lark/Kleisen07M.mid"]
+        )
+
+        # Indices to ignore because of wrong alignment or other issues
+        TO_IGNORE_INDICES = [152, 153, 154, 165, 166, 179, 180, 181, 332, 333, 334, 335, 349, 350,
+                            351, 418, 419, 420, 426, 428, 429, 430, 472, 473, 474, 489, 490, 491,
+                            516, 517, 518, 519, 520, 521, 522, 540, 541, 560, 609, 774, 798, 799,
+                            800, 801, 802, 803, 819, 920, 921, 935, 936, 937, 938, 939, 940, 941,
+                            979, 980, 981, 997, 998, 999, 1012, 1013, 1014, 1017, 1018]
+
+
+        # To keep eval consistent, we hardcode test piece ids here.
+        #TEST_PIECE_IDS = [15, 78, 159, 172, 254, 288, 322, 374, 395, 399, 411, 418, 452, 478]
+        # The ones below are gotten from maestro-v2 dataset
+        # I also remove piece IDS in ignore_indices and IDs that are problematic
+        if self.ts == "maestro":
+            TEST_PIECE_IDS = [20, 22, 23, 30, 41, 52, 54, 55, 62, 73, 78, 83, 90, 91, 95, 98, 121, \
+                    122, 129, 136, 138, 139, 141, 223, 232, 255, 324, 325, 341, 342, 343, 401, \
+                    421, 443, 445, 447]
+        elif self.ts == "beyer":
+            TEST_PIECE_IDS = [15, 78, 159, 172, 254, 288, 322, 374, 395, 399, 411, 418, 452, 478]
+        elif self.ts == "beyer_filtered":
+            TEST_PIECE_IDS = [15, 159, 172, 254, 288, 322, 374, 395, 399, 411, 418, 452, 478]
+        else:
+            raise ValueError("Unknown test split. Available options are: `maestro`, `beyer_filtered` and `beyer`")
+
+        data = pd.concat([real_data, synth_data])
+
+        # Perform filtering
+        data = data[(data["source"] == "ASAP") & data["aligned"]]
+        data = data[~data["performance_MIDI_external"].isin(SKIP)]
+        data = data[~data["performance_MIDI_external"].isin(UNALIGNED)]
+        data = data.drop_duplicates(subset=["performance_MIDI_external"])
+
+        # Filter by annotations
+        data.reset_index(inplace=True)
+        data.drop(TO_IGNORE_INDICES, inplace=True)
+
+        if opts:
+            data = data[~data["performance_audio_external"].isna()]
+
+        test_idx = data["piece_id"].isin(TEST_PIECE_IDS)
+
+        test_data = data[test_idx]
+        val_data = data[(data["piece_id"] % 10 == 0) & (~data["piece_id"].isin(TEST_PIECE_IDS))]
+        
+        # We will do some processing to get some train data
+        train_data = data[(data["piece_id"] % 10 != 0) & (~data["piece_id"].isin(TEST_PIECE_IDS))]
+
+        # Before returning, we replace {ASAP} with the actual path
+        actual_path = str(Path(ASAP_PATH) / "nasap-dataset")
+        for df in [train_data, val_data, test_data]:
+            for col in ["performance_MIDI_external", "MIDI_score_external", \
+                        "performance_annotation_external", "score_annotation_external"]:
+                # For all the rows in the column, replace {ASAP} with actual_path
+                # But some entries may be NaN, so we need to check for that
+                df.loc[:, col] = df[col].apply(lambda x: x.replace("{ASAP}", actual_path) if isinstance(x, str) else x)
+        
+        train_data_final = []
+        val_data_final = []
+        test_data_final = []
+
+        # We want to store (performance_MIDI_external,
+        # MDI_score_external, xml_score) tuples
+        # Do it for train, val, test
+        for _, row in train_data.iterrows():
+            xml_score = str(Path(row["MIDI_score_external"]).parent / "xml_score.musicxml")
+
+            # check the corresponding match file exists or skip
+            try:
+                assert Path(row["performance_MIDI_external"].replace("mid", "match")).exists(), \
+                    "Match file does not exist."
+            except:
+                continue
+
+            train_data_final.append((
+                row["performance_MIDI_external"],
+                row["MIDI_score_external"],
+                xml_score
+            ))
+        
+        for _, row in val_data.iterrows():
+            xml_score = str(Path(row["MIDI_score_external"]).parent / "xml_score.musicxml")
+
+            try:
+                assert Path(row["performance_MIDI_external"].replace("mid", "match")).exists(), \
+                    "Match file does not exist."
+            except:
+                continue
+
+            val_data_final.append((
+                row["performance_MIDI_external"],
+                row["MIDI_score_external"],
+                xml_score
+            ))
+        
+        for _, row in test_data.iterrows():
+            xml_score = str(Path(row["MIDI_score_external"]).parent / "xml_score.musicxml")
+
+            try:
+                assert Path(row["performance_MIDI_external"].replace("mid", "match")).exists(), \
+                    "Match file does not exist."
+            except:
+                continue
+
+            test_data_final.append((
+                row["performance_MIDI_external"],
+                row["MIDI_score_external"],
+                xml_score
+            ))
+        
+        # Validate the existence of all files
+        for dataset, name in zip([train_data_final, val_data_final, test_data_final], ['train', 'val', 'test']):
+            for midi_file, midi_score_file, xml_score_file in dataset:
+                assert Path(midi_file).exists(), f"{midi_file} does not exist in {name} set"
+                assert Path(midi_score_file).exists(), f"{midi_score_file} does not exist in {name} set"
+                assert Path(xml_score_file).exists(), f"{xml_score_file} does not exist in {name} set"
+        return train_data_final, val_data_final, test_data_final
+
+    def window_view(self, filename: str, num_measures: int = 2, store_dir: str = "./data"):
+        # Create store directory if it does not exist
+        Path(store_dir).mkdir(parents=True, exist_ok=True)
+
+        # Create audio, midi, midi_score, xml_score directories in store_dir
+        for subdir in ["midi", "midi_score", "xml_score", "audio_score"]:
+            subdir_path = Path(store_dir) / subdir
+            Path(subdir_path).mkdir(parents=True, exist_ok=True)
+
+        annots = self.asap_annots[filename.replace(str(Path(self.asap_path) / "nasap-dataset/") + "/", "")]
+        perf_db = annots["performance_downbeats"] # performance downbeats in seconds
+        mscore_db = annots["midi_score_downbeats"] # midi score downbeats in seconds
+        score_map = annots["downbeats_score_map"] # maps midi score downbeats to XML measures
+        key_sig = annots["midi_score_key_signatures"] # key signature of the piece
+        time_sig = annots["midi_score_time_signatures"] # time signature of the piece
+
+        # Time signature for the midi_score should occur on a downbeat level
+        # This is an assumption but seems reasonable
+        # For time signatures, I am pretty confident it is always on a downbeat
+        time_sig_list = self.get_time_sig(time_sig, mscore_db)
+
+        # for key signatures, it occurs on a beat level
+        key_sig_list = self.get_key_sig(key_sig, mscore_db)
+
+        # key is 'm{i}' where i is measure number
+        # value is a dict with keys 'pstart' and 'pend' giving performance start and end times in seconds
+        # 'sstart' and 'send' giving score start and end times in seconds
+        # 'measure_number' giving the measure number in the score
+        mhashmap = {} 
+        assert len(perf_db) == len(mscore_db) == len(score_map), f"Length mismatch in downbeats and score map"
+        num_db = len(perf_db)
+        
+        for i in range(0, num_db - num_measures, num_measures):
+            # We will use a two pointer approach to build the hashmap
+            j = i + num_measures - 1 # num_measures determines how much measures we consider in one window
+
+            # init the measure entry
+            if isinstance(score_map[i], str) or isinstance(score_map[j], str):
+                # We don't want to deal with this
+                # weird edge case
+                continue
+                
+            mhashmap[f'm{i+1}'] = {} # m(db) for the key where db is downbeat index
+
+            # measure number start
+            mhashmap[f'm{i+1}']['measure_number_start'] = int(score_map[i]) + 1 # +1 to convert from 0-indexed to 1-indexed
+            # measure number end
+            mhashmap[f'm{i+1}']['measure_number_end'] = int(score_map[j]) + 1 # +1 to convert from 0-indexed to 1-indexed
+
+            # performance start and end times
+            mhashmap[f'm{i+1}']['pstart'] = float(perf_db[i])
+            mhashmap[f'm{i+1}']['pend'] = float(perf_db[j+1])
+
+            # score start and end times
+            mhashmap[f'm{i+1}']['sstart'] = float(mscore_db[i])
+            mhashmap[f'm{i+1}']['send'] = float(mscore_db[j+1])
+
+            # Store key and time signatures between i and j
+            for each in range(i, j+2):
+                if 'key_signature' not in mhashmap[f'm{i+1}']:
+                    mhashmap[f'm{i+1}']['key_signature'] = []
+                mhashmap[f'm{i+1}']['key_signature'].append(key_sig_list[each])
+            
+                if 'time_signature' not in mhashmap[f'm{i+1}']:
+                    mhashmap[f'm{i+1}']['time_signature'] = []
+                mhashmap[f'm{i+1}']['time_signature'].append(time_sig_list[each])
+
+        # Now that we are done building the hashmap, we generate the audio, midi, midi_score, and xml_score files
+        midi_file = filename
+        midi_score_file = Path(filename).parent / "midi_score.mid"
+        xml_score_file = Path(filename).parent / "xml_score.musicxml"
+
+        assert Path(midi_file).exists(), f"MIDI file {midi_file} does not exist"
+        assert Path(midi_score_file).exists(), f"MIDI score file {midi_score_file} does not exist"
+        assert Path(xml_score_file).exists(), f"XML score file {xml_score_file} does not exist"
+
+        match_file = midi_file.replace("mid", "match") # path to match file
+        
+        # Get notes to be deleted
+        try:
+            notes_del = get_deletions(match_file)
+        except:
+            # This could be due to match file not loading right.
+            print("[ERROR]: Something wrong with match file.")
+            return
+
+        midi = pretty_midi.PrettyMIDI(str(midi_file))
+        midi_score = pretty_midi.PrettyMIDI(str(midi_score_file))
+        score_xml = m21.converter.parse(str(xml_score_file), forceSource=True)
+        performance = get_performance(match_file)
+
+        for key in mhashmap.keys():
+            measure_num_start = mhashmap[key]['measure_number_start']
+            measure_num_end = mhashmap[key]['measure_number_end']
+            measure_num_list = [measure_num_start, measure_num_end]
+
+            pstart = mhashmap[key]['pstart']
+            pend = mhashmap[key]['pend']
+            sstart = mhashmap[key]['sstart']
+            send = mhashmap[key]['send']
+            ks = mhashmap[key]['key_signature']
+            ts = mhashmap[key]['time_signature']
+
+            if not self.check_constant_ts(ts):
+                # Time signature should be constant
+                # across measures under consideration???
+                # why am I doing this by the way? Is it necessary???
+                continue
+
+            if pend - pstart < 5:
+                # ignore segments less than 5s
+                continue
+
+            # Get MIDI score segment
+            midi_score_segment = get_midi_note_events_strict(midi_score, sstart, send)
+            midi_seg_tempo_changes = get_tempo_changes(midi_score, sstart, send)
+            midi_seg_ts_changes = get_tsig_changes(midi_score, sstart, send)
+            midi_seg_ks_changes = get_ksig_changes(midi_score, sstart, send)
+            midi_score_segment = self.gen_midi_from_notes(midi_score_segment)
+            midi_score_segment.resolution = midi_score.resolution # Update resolution
+
+            # Add tempo changes, key signature changes and time signature changes to new MIDI segment
+            tempo_time, tempi = midi_seg_tempo_changes
+
+            last_tick = 0
+            last_tick_scale = 60.0/(tempi[0].item() * midi_score_segment.resolution)
+            previous_time = 0.
+            midi_score_segment._tick_scales = [(last_tick, last_tick_scale)]
+
+            for i in range(1, len(tempo_time)):
+                # compute new tick position
+                tick = last_tick + (tempo_time[i].item() - previous_time)/last_tick_scale 
+                # Update tick scale
+                tick_scale = 60.0 / (tempi[i].item() * midi_score_segment.resolution)
+                # Don't add repeat tick scales
+                if tick_scale != last_tick_scale:
+                    midi_score_segment._tick_scales.append((int(round(tick)), tick_scale))
+                    previous_time = tempo_time[i].item()
+                    last_tick, last_tick_scale = tick, tick_scale
+
+            # Update tick to time mapping
+            midi_score_segment._update_tick_to_time(midi_score_segment._tick_scales[-1][0] + 1)
+            midi_score_segment.time_signature_changes = midi_seg_ts_changes
+            midi_score_segment.key_signature_changes = midi_seg_ks_changes
+
+            tempos = midi_score_segment.get_tempo_changes()[1].tolist()
+            if len(tempos)>1:
+                prefix = Path(filename).parent.name
+                print(f"{prefix}_{Path(filename).stem}_m{measure_num_start}.wav")
+
+            # Get XML score segment
+            score_xml_segment = get_xml_score_del(score_xml, measure_num_list,\
+                                ks, ts, tempos, notes_del)
+
+            # Get MIDI segment
+            # This is the MIDI segement that corresponds to score
+            try:
+                midi_segment = get_aligned_midi_from_score(midi, score_xml_segment, pstart, pend)
+            except RuntimeError as e:
+                print(e)
+                continue
+            # try:
+            #     midi_segment = extract_perf_measure(performance, measure_num_start, measure_num_end)
+            # except:
+            #     print("[ERROR]: Performance extraction was wrong")
+            #     continue
+
+            # midi_segment = pretty_midi.PrettyMIDI(mido_object = save_pt_performance_array(midi_segment))
+            
+            midi_segment = self.gen_midi_from_notes(midi_segment)
+            # get pedal events in the window
+            pedal_events = get_pedal_events_strict(midi, pstart, pend)
+
+            # we should have one instrument in midsi_segment
+            for time, value in pedal_events:
+                cc = pretty_midi.ControlChange(number=64, value=value, time=time)
+                midi_segment.instruments[0].control_changes.append(cc)
+
+            audio_score_segment = midi2audio(midi_segment, fs=16000, \
+                sf2_path="/home/nkcemeka/Documents/snap/snap2midi/notebooks/soundfonts/MuseScore_General.sf2" )
+
+            # Save the segments to files
+            prefix = Path(filename).parent.name
+            audio_score_store_path = Path(store_dir) / "audio_score" / f"{prefix}_{Path(filename).stem}_m{measure_num_start}.wav"
+            midi_store_path = Path(store_dir) / "midi" / f"{prefix}_{Path(filename).stem}_m{measure_num_start}.mid"
+            midi_score_store_path = Path(store_dir) / "midi_score" / f"{prefix}_{Path(filename).stem}_m{measure_num_start}.mid"
+            xml_score_store_path = Path(store_dir) / "xml_score" / f"{prefix}_{Path(filename).stem}_m{measure_num_start}.musicxml"
+
+            # Save audio
+            try:
+                # If the score saves to fail for some reason, then skip
+                remove_broken_ties(score_xml_segment, str(xml_score_store_path)) # This function saves the file as well
+                #score_xml_segment.write('musicxml', fp=str(xml_score_store_path), makeNotation=True)
+            except:
+                continue
+
+            sf.write(str(audio_score_store_path), audio_score_segment, 16000)
+            midi_segment.write(str(midi_store_path))
+            midi_score_segment.write(str(midi_score_store_path))
+
+
+#a = NASAPScoreDataset(store_dir="./data", num_measures=2, test_split="beyer_filtered")    
+#a = ASAPScoreDataset(store_dir="./basedir")
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Extract segments for user study")
     
     # Define arguments
+    parser.add_argument("-m", "--mode", help="Modes are midi, score and all", required=True)
     parser.add_argument("-nm", "--num_measures", help="Number of measures to extract")
-    parser.add_argument("-p", "--path", help="Path to ASAP dataset", required=False)
-    parser.add_argument("-o", "--output_dir", help="Path to directory to store segements. Default is 'data'",\
-        required=False)
-    parser.add_argument("-ts", "--test_split", help="Default is `maestro`. You can use `beyer` as well.", required=False)
+    parser.add_argument("-p", "--path", help="Path to ASAP dataset", required=True)
+    parser.add_argument("-o", "--output_dir", \
+        help="Path to directory to store segements. Default is 'data'", required=False)
+    parser.add_argument("-ts", "--test_split", help="Default is `maestro`. You can use `beyer` as well.", required=True)
 
     args = parser.parse_args()
+    test_split = args.test_split
 
-    if args.test_split is None:
-        test_split = "maestro"
+    if args.mode == "midi":
+        ASAPMidiDataset(asap_path=args.path, num_measures=int(args.num_measures), store_dir=args.output_dir, \
+            test_split=test_split)
+    elif args.mode == "score":
+        # ASAPScoreDataset(asap_path=args.path, num_measures=int(args.num_measures), store_dir=args.output_dir, \
+        #     test_split=test_split)
+        NASAPScoreDataset(asap_path=args.path, num_measures=int(args.num_measures), store_dir=args.output_dir, \
+            test_split=test_split)
     else:
-        test_split = args.test_split
-
-    if args.path:
         ASAPDataset(asap_path=args.path, num_measures=int(args.num_measures), store_dir=args.output_dir, \
                 test_split=test_split)
-    else:
-        ASAPDataset(num_measures=int(args.num_measures), store_dir=args.output_dir, test_split=test_split)
-

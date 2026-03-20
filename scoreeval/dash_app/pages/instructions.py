@@ -19,11 +19,13 @@ assist expert musicians by providing useful transcription drafts and alternative
 
 Your expertise as a trained musician is essential. 
 We are interested in how automatically generated transcriptions align with professional musical expectations, 
-and how useful they are in real transcription workflows.
+and how useful they are in real transcription workflows. Before proceeding, we **strongly recommend** 
+using a *Chrome or Brave Browser* on a laptop or desktop computer.  This will ensure the best possible user experience 
+as you navigate through the study.
 
 ---
 ## The UI
-The UI has been designed to make your experience simple and straightforward. We will quickly go through various
+The User Interface (UI) has been designed to make your experience simple and straightforward. We will quickly go through various
 components you should be aware of.
 
 **The Progress Bar**: This is a visual aid that gives you a rough idea of how close you are to finishing the study.  
@@ -36,7 +38,7 @@ to the audio, simply press the play button.
 *Figure 2: Reference Audio.*
 
 **Transcription Pairs**: We have a number of transcription pairs we want you to evaluate. 
-These transcriptions are presented as score or piano roll images and are generated from two different music transcription 
+These transcriptions are presented as score/piano roll images and are generated from two different music transcription 
 models.
 Above each transcription image is an audio component. The audio component is an acoustic rendition 
 of the score or MIDI transcription under consideration. For the piano roll images, the notes are layered 
@@ -49,8 +51,9 @@ in the signal.
 ![alt text](assets/ui_imgs/trans_midi.png)  
 *Figure 3b: MIDI Transcription Pairs*
 
-**Dimensions**: For each presented transcription pair, you will select the transcription you prefer under several dimensions. 
-If you don't know what a dimension represents, simply hover over the name to get a helpful popup. For this section, you are 
+**Dimensions**: For each presented transcription pair, you will select the transcription you prefer under several dimensions, 
+which will be defined more extensively below. 
+If you forget what a dimension represents during the study, simply hover over the name to get a helpful popup. For this section, you are 
 tasked with selecting **which of the presented transcription pair better satisfies the criterion 
 referred to by each dimension**.
 
@@ -81,47 +84,59 @@ state of your work; you can also logout and continue from where you stopped. It 
 
 
 ##### MIDI Transcriptions
-As a transcriber, you might be be interested in the notes of a piece for many reasons. For instance, you might need to inspect 
-the note content for specific passages where the music is ambiguous (e.g., fast runs, dense textures, clustered chords). Below are detailed definitions for each of the dimensions 
-we want you to consider when evaluating MIDI transcriptions:
+As a transcriber, you might be interested in the notes of a piece for many reasons. 
+For instance, you might need to inspect the note content for specific passages where the music 
+is ambiguous (e.g., fast runs, dense textures, clustered chords). 
+Below are detailed definitions for each of the dimensions we want you to consider when evaluating MIDI transcriptions:
 
-- **Draft**: If you had to choose one transcription as the starting point for further editing, which would you prefer? A transcription that is 
-faithful to the audio is not necessarily the best draft. A draft may be imperfect but structured in a way
- that makes refinement easier.
-- **Faithfulness to Ref. Audio**: Which transcription more accurately reflects the musical content present in the reference audio?
-Consider overall correspondence to what is heard, including notes, structure, and musical detail.
-- **Pitch**: Compare the transcriptions solely on their pitch content relative to the reference.
-- **Rhythm**: Which transcription better captures the rhythmic feel as heard in the reference audio?
-- **Harmony**: Here, we want you to focus on the vertical dimension: the notes that are played simultaneously and how this 
-evolves with time. In essence, which transcription better captures the harmonic content of the reference piece? Note that a 
-transcription might be harmonically complete (e.g., including bass notes, inner voices, or higher-register notes), 
-but may also introduce additional notes that are not present in the reference. 
-Others may omit some harmonic material while avoiding added content. When such trade-offs occur, use your own judgment 
-to decide which transcription provides the more convincing harmonic representation. 
-You may prioritize completeness or precision according to your preference.
+- **Draft**: If you had to choose one of the presented transcription pairs as a starting point for further editing, which would you prefer? 
+This dimension reflects the practical workflow of a transcriber, where the output of an AI system serves as a foundation for refinement while 
+still allowing room for improvement. Note that a transcription that is perfectly faithful to the reference piece is not necessarily 
+the best draft. A strong draft may be imperfect, but structured in a way that supports efficient revision and further development.
+
+- **Faithfulness to Ref. Audio**: Which transcription more accurately reflects the musical content of the reference audio? 
+Consider the overall correspondence to what is heard, including notes, structure, phrasing, and musical detail.
+
+- **Pitch**: This dimension focuses specifically on pitch accuracy. Which transcription more accurately represents the pitch content 
+of the reference piece? Compare the transcriptions solely in terms of pitch, independent of other musical aspects.
+
+- **Rhythm**: Which transcription better captures the rhythmic feel and timing of the reference audio?
+
+- **Harmony**: Here, we want you to focus on notes played simultaneously and how this evolves over time. 
+In other words, which transcription better represents the harmonic structure of the reference piece? 
+A transcription may be harmonically complete (for example, including bass notes, inner voices, or upper-register notes) 
+but introduce additional notes that are not present in the reference. Another may be sparser, 
+omitting certain harmonic details while avoiding extraneous notes. In such cases, use your judgment to 
+determine which transcription provides the more convincing harmonic representation. You may prioritize 
+completeness or precision, whichever you prefer.
 
 ##### Score Transcriptions
-As a transcriber, your ultimate goal is to produce a score that reflects the musical structure of the piece while also 
-incorporating your artistic judgement. The dimensions below are intended to capture different 
-aspects of this process.
+As a transcriber, your ultimate goal is to produce a score that reflects the musical structure of the piece while 
+incorporating your artistic judgment. The dimensions below capture different aspects of this process.
 
-- **Draft**: Which transcription would you prefer to use as a starting point for your work? 
-Note that a good transcription does not need to be a good draft; in fact, a less faithful transcription may be easier 
-to refine into a final version.
+- **Draft**: Which transcription would you prefer to use as a starting point for your work? Again, note that a good transcription 
+does not need to be a good draft; in some cases, a less faithful transcription may be easier to refine into a final version.
+
 - **Faithfulness to Ref. Audio**: How well does the transcription capture the overall musical content—its structure, 
-rhythm, phrasing, and the general flow of what is heard
-- **Pitch**: Compare the transcriptions solely on their pitch content relative to the reference.
-- **Metrical Alignment**: Here the focus is on meter. Does the notated meter align with the metrical structure perceived from the audio?
+rhythm, phrasing, and the general flow of what is heard.
+
+- **Pitch**: This dimension targets the accuracy of the pitch content in a transcription relative to the reference.
+
+- **Metrical Alignment**: Here, the focus is on meter. Does the notated meter align with the metrical structure perceived from the audio? 
 Even if multiple meters could describe the piece, which transcription offers the most convincing metrical representation?
-- **Note Duration**: Which transcription more accurately represents **the relative durations of notes** as heard in the reference audio?
-For this dimension, we want you to ignore *tempo*. Instead, focus on the relative durations between notes and not duration in absolute time.
-- **Voice**: For this study, we define a voice as a monophonic perceptual stream of notes. By that, we mean note groupings in the score
-that seem to convey a musical phrase, thought or idea. Which transcription better separates and represents distinct voices?
-- **Harmony**: Harmony is strongly determined by the key of the piece and the chords that are used in the piece. Considering
-the key and the chords played in the score, which transcription do you think better captures the harmonic essence of the piece?
-- **Notation**: Notation is a broad subject; it takes into consideration the assignment of notes to different staffs, 
-pitch spelling (C#/Db), beaming, ties, markings and much more. For this study, we limit notation to staff assignment, 
-stem direction and pitch spelling. Based on these sub-aspects, what transcription do you prefer, notation-wise?
+
+- **Note Duration**: Which transcription more accurately represents **the relative durations of notes** as heard in the reference audio? 
+For this dimension, ignore the effect of *tempo*. Instead, focus on the relative durations between notes and not the duration in absolute time.
+
+- **Voice**: For this study, we define a voice as a monophonic perceptual stream of notes. By that, we mean note groupings in the score 
+that seem to convey a musical phrase, thought, or idea. Which transcription better separates and represents distinct voices?
+
+- **Harmony**: Harmony is strongly determined by the key of the piece and the chords that are used in the piece. Considering the key and the
+ chords played in the score, which transcription do you think better captures the harmonic essence of the piece?
+
+- **Notation**: Notation is a broad subject; it takes into consideration the assignment of notes to different staff, pitch spelling (C#/Db), 
+beaming, ties, markings, and much more. For this study, we limit notation to staff assignment, stem direction, and pitch spelling. Based on 
+these sub-aspects, what transcription do you prefer, notation-wise?
 
 
 ---
@@ -142,7 +157,7 @@ rely primarily on it; instead, base your preferences mainly on what you see.
 
 ### Using the Reference Audio
 
-For all questions, a **reference audio recording** is provided.
+For all transcription pairs, a **reference audio recording** is provided.
 
 You are encouraged to:
 - Listen to the audio multiple times
@@ -153,7 +168,7 @@ You are encouraged to:
 
 ### Evaluating Suitability as a Starting Draft
 
-All questions present a dimension that ask you to evaluate the **suitability of a transcription as a starting draft**.
+ Each comparison presents a dimension that asks you to evaluate the **suitability of a transcription as a starting draft**.
 
 In this context, imagine that you are beginning a manual transcription task. Consider:
 - How much correction would be required

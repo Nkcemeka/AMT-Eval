@@ -6,7 +6,7 @@ from dash_app.components import audio_component, nav_btns_component,\
       NUM_DIM_MIDI, NUM_DIM_SCORE, audio_trans_comp
 import dash
 import json
-from dash_app.database import add_response, save_lq, load_lq
+from dash_app.database import add_response, save_lq, load_lq, add_finished
 from flask_login import current_user
 from dash.exceptions import PreventUpdate
 
@@ -197,7 +197,7 @@ def go_to_next_question(n_clicks_front_ts, n_clicks_back_ts, current_idx,\
                 temp_dict[label] = radio_choice
             else:
                 raise ValueError("Invalid child element!")
-
+            
         if temp_dict and len(temp_dict.keys()) == NUM_DIM_MIDI:
             selections[str(current_idx)] = temp_dict
             dim_status = True
@@ -231,6 +231,8 @@ def go_to_next_question(n_clicks_front_ts, n_clicks_back_ts, current_idx,\
 
     if current_idx == len(questions) - 1:
         if dim_status:
+            # also indicate in database we are done
+            add_finished(current_user.get_id())
             return max_ts, selections, last_click_next, dim_status, current_idx, next_btn_str, True, not btn_click
         else:
             return max_ts, selections, last_click_next, dim_status, current_idx, next_btn_str, False, not btn_click

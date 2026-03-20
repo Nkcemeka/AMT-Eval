@@ -10,7 +10,7 @@ __pycache__
 .vscode
 Nakamura
 examples.sh
-logfile.log
+*.log
 PEAMT
 mpteval
 ScoreRearrangement
@@ -19,3 +19,4 @@ ScoreRearrangement
 assets/
 study.db
 .env
+dataset.sh

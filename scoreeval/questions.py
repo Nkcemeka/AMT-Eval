@@ -15,12 +15,14 @@ MIDI_STORE_DIR = STORE_DIR / "midi_data"
 SCORE_STORE_DIR = STORE_DIR / "score_data"
 AUDIO_STORE_DIR = STORE_DIR / "audio"
 PAUDIO_STORE_DIR = STORE_DIR / "paud_data"
+PAUDIO_SCORE_STORE_DIR = STORE_DIR / "paud_score_data"
 
 # Create store directories if they don't exist
 Path(MIDI_STORE_DIR).mkdir(exist_ok=True, parents=True)
 Path(SCORE_STORE_DIR).mkdir(exist_ok=True, parents=True)
 Path(AUDIO_STORE_DIR).mkdir(exist_ok=True, parents=True)
 Path(PAUDIO_STORE_DIR).mkdir(exist_ok=True, parents=True)
+Path(PAUDIO_SCORE_STORE_DIR).mkdir(exist_ok=True, parents=True)
 
 questions_dict = {"questions": []}
 
@@ -66,20 +68,34 @@ def gen_questions(midi_json: str, score_json: str):
         shutil.copy2(sf["audio"], AUDIO_STORE_DIR)
         shutil.copy2(sf["images"][0], SCORE_STORE_DIR)
         shutil.copy2(sf["images"][1], SCORE_STORE_DIR)
-        shutil.copy2(sf["audio_trans"][0], PAUDIO_STORE_DIR)
-        shutil.copy2(sf["audio_trans"][1], PAUDIO_STORE_DIR)
+        shutil.copy2(sf["audio_trans"][0], PAUDIO_SCORE_STORE_DIR)
+        shutil.copy2(sf["audio_trans"][1], PAUDIO_SCORE_STORE_DIR)
 
         q_dict = {"audio": f"assets/audio/{Path(sf["audio"]).stem+".wav"}",\
                   "images": [f"assets/score_data/{Path(sf["images"][0]).stem+".png"}", \
                             f"assets/score_data/{Path(sf["images"][1]).stem+".png"}"],
-                  "audio_trans": [f"assets/paud_data/{Path(sf["audio_trans"][0]).stem+".wav"}",\
-                        f"assets/paud_data/{Path(sf["audio_trans"][1]).stem+".wav"}"],
+                  "audio_trans": [f"assets/paud_score_data/{Path(sf["audio_trans"][0]).stem+".wav"}",\
+                        f"assets/paud_score_data/{Path(sf["audio_trans"][1]).stem+".wav"}"],
                   "type": "SCORE"}
         
         questions_dict["questions"].append(q_dict)
-    
+
 
 # Generate questions and create JSON file
 gen_questions("data/midi_examples/midi_samples.json", "data/score_examples/score_samples.json")
+
+# filter out duplicates (MIDI and score questions based on same piece)
+hashmap = {}
+for each in questions_dict["questions"]:
+    hashmap[each['audio']] = hashmap.get(each['audio'], 0) + 1
+
+duplicates = set([item for item in hashmap.keys() if hashmap[item]>1])
+final_dict = {"questions": []}
+
+for each in questions_dict["questions"]:
+    if each['audio'] in duplicates:
+        continue
+    final_dict['questions'].append(each)
+
 with open(str(STORE_DIR/"questions.json"), "w", encoding="utf-8") as f:
-    json.dump(questions_dict, f, indent=4)
+    json.dump(final_dict, f, indent=4)

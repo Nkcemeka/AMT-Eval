@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 import random
 import json
 from pathlib import Path
-from dash_app.database import add_response, save_lq, load_lq
+from dash_app.database import add_response, save_lq, load_lq, load_finished
 
 FILE_PATH = Path(__file__).resolve().parent
 
@@ -58,6 +58,7 @@ app.layout = html.Div(
         dcc.Store(id="dummy", data=''),
         dcc.Store(id='button-clicked', data=0), # tracks if next/back button was clicked on questions page
         dcc.Store(id="current-question", data=-1, storage_type="session"),
+        dcc.Store(id="submit-gold-msi", data=False, storage_type="session"),
         dcc.Location(id="url", refresh=True),
         dbc.NavbarSimple(id="navbar",
             children=[],
@@ -193,10 +194,15 @@ def gen_order(questions):
 @app.callback(
     Output('seen-instructions', 'data'),
     Input('url', "pathname"),
+    State('user-selections', 'data'),
 )
-def update_nav_instruct(page):
+def update_nav_instruct(page, selections):
     if page == "/questions" and current_user.is_authenticated:
         return True
+    
+    # if len(selections)>0:
+    #     # in case, user is logging in and has seen a question before
+    #     return True
     return dash.no_update
 
 # Router callback to deal with
@@ -208,9 +214,10 @@ def update_nav_instruct(page):
     Input("url", "pathname"),
     Input("init-login", "data"),
     Input("finished", "data"),
+    Input("submit-gold-msi", "data"),
     State('seen-instructions', 'data'),
 )
-def router(page, _, finished: bool, seen_flag: bool):
+def router(page, _, finished: bool, submit_gold: bool, seen_flag: bool):
     # if user is not authenticated and we are not on the signup
     # page, we go to Login
     if not current_user.is_authenticated and page != "/signup":
@@ -234,9 +241,9 @@ def router(page, _, finished: bool, seen_flag: bool):
                 dbc.NavItem(dbc.NavLink("Instructions", href="/instructions")),
                 dbc.NavItem(dbc.NavLink("Logout", href="/logout")),
     ]
-    
-    thankyou_nav = [
-        dbc.NavItem(dbc.NavLink("Logout", href="/logout")),
+
+    logout_nav = [
+        dbc.NavItem(dbc.NavLink("Logout", href="/logout"))
     ]
 
     if page == "/signup":
@@ -244,17 +251,27 @@ def router(page, _, finished: bool, seen_flag: bool):
                         className="nav-hover", id="nav-login")),], ""
     
     if page == "/login" and current_user.is_authenticated:
-        return "/", home_logout_nav, "User Study"
+        if load_finished(current_user.get_id()):
+            return "/thanks", logout_nav, ""
+        else:
+            return "/", home_logout_nav, "User Study"
     
     if page == "/logout" and current_user.is_authenticated:
         logout_user()
-        return dash.no_update, fullnav, ""
-        #return "/login", fullnav, ""
+        return dash.no_update, [], ""
     
     # If the user is authenticated
     # Check if he is done with the questions
-    if finished:
-        return "/thanks", thankyou_nav, "User Study"
+    if finished or load_finished(current_user.get_id()):
+        # if we finished from the app or its finished from the
+        # database, then redirect to the thanks page
+        return "/thanks", logout_nav, ""
+    
+    if page == "/goldmsi" and current_user.is_authenticated:
+        if submit_gold:
+            return "/instructions", home_logout_nav, "User Study"
+        else:
+            return dash.no_update, logout_nav, "User Study"
     
     if page=="/questions" and current_user.is_authenticated:
         if seen_flag:

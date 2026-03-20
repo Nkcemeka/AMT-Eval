@@ -17,23 +17,19 @@ import json
 import torch
 import snap2midi as s2m
 from tqdm import tqdm
+import subprocess
 import pandas as pd
 import soundfile as sf
 from utils import trans, beyer_midi_xml, nakamura_inference, pm2s_inference, generate_piano_roll,\
-      musescore_convert, musescore_convert_img, get_note_scores, compute_activation_metrics, \
-      compute_mpteval, midi2audio, generate_piano_roll_spect, beyer_mscore_postprocess, \
-      mv2h_eval, scoreMuster, scoreSim
+      musescore_convert, musescore_convert_img, get_note_scores, \
+      midi2audio, generate_piano_roll_spect, beyer_mscore_postprocess, postprocess_mscore_speed, \
+      mv2h_eval
 from constants import KONG_CHECKPOINT, KONG_EXT_CONFIG, KONG_PEDAL_CHECKPOINT, HFT_CHECKPOINT, OAF_CHECKPOINT
 from collections import defaultdict
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as colors
-from matplotlib.colors import BoundaryNorm, Normalize
 import os
-import itertools
-import tempfile
-import shutil
-import matplotlib.patches as patches
 from itertools import combinations
 import random
 
@@ -64,7 +60,7 @@ class Band:
         return self.__str__()
 
 class ExMidiBasic:
-    def __init__(self, audioPath: str="./data/audio", midiPath: str = "./data/midi", \
+    def __init__(self, audioPath: str="./data/audio", midiPath: str = "./data/pmidi", \
                  midiScorePath: str="./data/midi_score", xmlScorePath: str="./data/xml_score",
                  ONSET_OFFSET_FLAG: bool=False, model1='kong', model2='transkun') -> None:
         """
@@ -91,9 +87,11 @@ class ExMidiBasic:
         self.midi_score_files = sorted(Path(midiScorePath).glob("*.mid"))
         self.xml_score_files = sorted(Path(xmlScorePath).glob("*.musicxml"))
 
-        # Assertion to ensure number of audio, midi, midi_score and xml_score files are the same
-        assert len(self.audio_files) == len(self.midi_files) == len(self.midi_score_files) == len(self.xml_score_files), "\
-            Number of audio, midi, midi_score and xml_score files are unequal!"
+        # Assertion to ensure number of audio and midi files are the same
+        # assert len(self.audio_files) == len(self.midi_files) == len(self.midi_score_files) == len(self.xml_score_files), "\
+        #     Number of audio, midi, midi_score and xml_score files are unequal!"
+        assert len(self.audio_files) == len(self.midi_files), "\
+            Number of audio and midi files are unequal!"
         
         self.inference = s2m.inference.Inference()
         self.ONSET_OFFSET_FLAG = ONSET_OFFSET_FLAG # if false, it uses onset-only F1 score
@@ -143,16 +141,14 @@ class ExMidiBasic:
         Path(self.STORE_PATH + "/pred_proll").mkdir(parents=True, exist_ok=True) 
         Path(self.STORE_PATH + "/pred_sproll").mkdir(parents=True, exist_ok=True) # spectrogram piano roll
 
-        for idx, (audio_file, midi_file, midi_score_file, xml_score_file) in tqdm(enumerate(zip(self.audio_files, \
-            self.midi_files, self.midi_score_files, self.xml_score_files)), total=len(self.audio_files),\
+        for idx, (audio_file, midi_file) in tqdm(enumerate(zip(self.audio_files, \
+            self.midi_files)), total=len(self.audio_files),\
             desc="Processing files"):
 
             # dictionary to store our interesting examples
             int_dict = {
                         'audio': str(audio_file),
-                        'midi': str(midi_file),
-                        'midi_score': str(midi_score_file), 
-                        'xml_score': str(xml_score_file),
+                        'midi': str(midi_file)
             }
             
             assert audio_file.stem == midi_file.stem, f"Audio and MIDI file names do not match: {audio_file.stem} != {midi_file.stem}"
@@ -427,7 +423,7 @@ class ExScore:
         Generate examples for the MIDI
         to Score evaluation!
     """
-    def __init__(self, audioPath: str="/home/nkcemeka/Documents/ismir2026/scoreeval/data/audio", \
+    def __init__(self, audioPath: str="/home/nkcemeka/Documents/ismir2026/scoreeval/data/audio_score", \
                  midiPath: str = "/home/nkcemeka/Documents/ismir2026/scoreeval/data/midi", \
                  midiScorePath: str="/home/nkcemeka/Documents/ismir2026/scoreeval/data/midi_score", \
                  xmlScorePath: str="/home/nkcemeka/Documents/ismir2026/scoreeval/data/xml_score"):
@@ -504,7 +500,8 @@ class ExScore:
                 # Now get the mscore for beyer with musescore
                 musescore_convert(beyer_xml_path, beyer_mscore_path)
                 # For beyer, we will read the mscore and postprocess it
-                beyer_mscore_postprocess(beyer_mscore_path, beyer_mscore_path)
+                postprocess_mscore_speed(beyer_mscore_path, ex_dict['midi_score'], beyer_mscore_path)
+                #beyer_mscore_postprocess(beyer_mscore_path, beyer_mscore_path)
 
                 assert Path(beyer_mscore_path).exists()
                 assert Path(beyer_xml_path).exists()
@@ -563,7 +560,7 @@ class ExScore:
         
         # Generate audio for all of the engravings
         self.gen_audio(f"{str(self.STORE_PATH)}/examples.json")
-        model_list = ['beyer', 'pm2s', 'nakamura', 'musescore']
+        model_list = ['beyer', 'pm2s', 'nak', 'musescore']
         model_pairs = list(combinations(model_list, 2))
         for pair in model_pairs:
             self.gen_plots(pair[0], pair[1])
@@ -598,7 +595,7 @@ class ExScore:
         """ 
             Generates plots based on the MV2H metric.
             Accepted model names are: ['beyer', 'musescore', \
-                'nakamura', 'pm2s']
+                'nak', 'pm2s']
 
             Args:
                 model1 (str): model1 name
@@ -616,6 +613,7 @@ class ExScore:
         #gt_files = Path(GT_DIR).glob("*.mid")
         model1_files = sorted(Path(MSCORE_PATH).glob(f"*{model1}*.mid"))
         model2_files = sorted(Path(MSCORE_PATH).glob(f"*{model2}*.mid"))
+        print(len(model1_files), len(model2_files))
         # model1_files = sorted(Path(XML_PATH).glob(f"*{model1}*.musicxml"))
         # model2_files = sorted(Path(XML_PATH).glob(f"*{model2}*.musicxml"))
         #mus_score1 = []
@@ -700,7 +698,11 @@ class ExScore:
                 if each == "Avg":
                     continue
                 items = Path(each).stem.split("_")
-                key = items[0] + "_" + items[1]
+                key = items[0]
+                for idx, s in enumerate(items):
+                    if idx > 0 and idx < len(items)-1:
+                        key = key + "_" + s
+                # key = items[0] + "_" + items[1] + "_" + items[2]
                 hash_objs[i][key] = each
         
         # keep pieces in all hash_objs
@@ -709,7 +711,11 @@ class ExScore:
                 if each == "Avg":
                     continue
                 items = Path(each).stem.split("_")
-                key = items[0] + "_" + items[1]
+                key = items[0]
+                for idx, s in enumerate(items):
+                    if idx > 0 and idx < len(items)-1:
+                        key = key + "_" + s
+                # key = items[0] + "_" + items[1] + "_" + items[2]
                 valid = (key in hash_objs[0]) & (key in hash_objs[1]) & (key in hash_objs[2]) & (key in hash_objs[3])
                 if valid:
                     final_hash[key] = None
@@ -760,8 +766,17 @@ if __name__ == "__main__":
     if int(args.m):
         ex = ExMidiBasic(model1='hft', model2='oaf')
         ex.gen_examples()
-        ex.sample("./data/midi_examples/examples.json", NUM_EXAMPLES=500)
+        ex.sample("./data/midi_examples/examples.json", NUM_EXAMPLES=80)
     else:
         ex = ExScore()
         ex.gen_examples()
-        ex.sample("data/score_examples/output.xlsx", NUM_EXAMPLES=500)
+        with open("metrics.log", "w") as log:
+            subprocess.run(
+                ["python", "calc_metrics.py",
+                "-p", "./data/score_examples/",
+                "-o", "/home/nkcemeka/Documents/ismir2026/scoreeval/data/score_examples/output.xlsx",
+                "-m", "0"],
+                stdout=log,
+                stderr=subprocess.STDOUT
+            )
+        ex.sample("data/score_examples/output.xlsx", NUM_EXAMPLES=80)

@@ -16,11 +16,12 @@ xlsxwriter
 pillow
 SQLAlchemy
 bcrypt
+partitura
 dash-auth
 Flask-Login
 python-dotenv
 transformers==4.37.2
 muster @ git+https://github.com/TimFelixBeyer/amtevaluation.github.io
-music21 @ git+https://github.com/TimFelixBeyer/music21@0ed70bb
+music21 @ git+https://github.com/Nkcemeka/music21.git
 score_transformer @ git+https://github.com/TimFelixBeyer/ScoreTransformer@934a228
 snap2midi @ git+https://github.com/Nkcemeka/Snap2MIDI.git

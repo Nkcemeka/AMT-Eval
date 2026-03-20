@@ -11,22 +11,22 @@ SCORE_LABELS = ['Draft', 'Faithfulness to Ref. Audio', 'Pitch', 'Metrical Alignm
                 'Voice', 'Harmony', 'Notation']
 
 TOOLTIP_TEXT_MIDI = {
-    "Faithfulness to Ref. Audio": "Overall faithfulness to the reference audio.",
-    "Draft": "This indicates what MIDI transcription you would prefer as a starting point for your work.",
-    "Pitch": "Pitch content of the transcriptions relative to the reference.",
-    "Rhythm": "Transcription preference in terms of rhythm relative to the reference.",
-    "Harmony": "Accuracy in terms of notes played simultaneously.",
+    "Faithfulness to Ref. Audio": "Overall correspondence to the reference audio, including notes, structure, phrasing, and musical detail.",
+    "Draft": "Preferred starting point for further editing and refinement.",
+    "Pitch": "Accuracy of the pitch content relative to the reference audio.",
+    "Rhythm": "How well the rhythmic feel and timing match the reference audio.",
+    "Harmony": "Harmonic accuracy in terms of notes played simultaneously.",
 }
 
 TOOLTIP_TEXT_SCORE = {
     "Faithfulness to Ref. Audio": "Overall faithfulness to the reference audio.",
-    "Draft": "Which score you would prefer to use as a starting point for your work.",
-    "Pitch": "Pitch content of the transcriptions relative to the reference.",
-    "Harmony": "The key signature and the predicted chords.",
-    "Voice": "Preference in terms of monophonic voice separation. Essentially, are notes assigned to the correct voice?",
-    "Metrical Alignment": "How well the notated meter reflects the metrical structure of the piece.",
-    "Note Duration": "Transcription preference with regards to the relative duration of the predicted notes.",
-    "Notation": "This is specifically focused on staff assignment, pitch spelling and stem directions."
+    "Draft": "Preferred starting point for refinement and editing.",
+    "Pitch": "Accuracy of the pitch content relative to the reference audio.",
+    "Harmony": "How well the key and chord structure reflect the harmonic essence of the piece?",
+    "Voice": "How effectively are distinct monophonic voices (perceptual streams) separated and represented?",
+    "Metrical Alignment": "How convincingly does the notated meter reflect the perceived metrical structure of the reference piece?",
+    "Note Duration": "Transcription preference with regard to the relative duration of the predicted notes. Please ignore the effects of tempo.",
+    "Notation": "Transcription preference based on these three notational aspects: staff assignment, pitch spelling, and stem directions."
 }
 
 
@@ -52,7 +52,7 @@ def likert_component(radio_id):
         4: 'Impossible'
     }
 
-    return html.Div(dcc.RadioItems(
+    radio_items = dcc.RadioItems(
             id=radio_id,
             options=[{"label": f"{mapping[i]}", "value": str(i)} for i in range(5)],
             labelStyle={"display": "grid"},
@@ -60,7 +60,8 @@ def likert_component(radio_id):
             },
             className="likert-class",
             value=None
-        ), id="likert-div")
+        )
+    return html.Div(radio_items, className="likert-div")
 
 
 def audio_component(audio_path: str) -> html.Div:

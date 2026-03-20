@@ -216,7 +216,11 @@ def metrics_score_model(data: list, model_id: str) -> pd.DataFrame:
         filename = str(Path(pred_xml).stem) # Will be used for table display
 
         # score similarity seems to work fine without any problems (so that's great)
-        score_sim = scoreSim(gt_xml, pred_xml)
+        # found some issues with score similarity for some files, so skip
+        try:
+            score_sim = scoreSim(gt_xml, pred_xml)
+        except:
+            continue
 
         # Muster has some memory leak issues; hence, we do some
         # error handling

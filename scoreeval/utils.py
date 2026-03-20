@@ -11,6 +11,7 @@ from externals.MIDI2ScoreTransformer.midi2scoretransformer.models.roformer impor
 from externals.MIDI2ScoreTransformer.midi2scoretransformer.score_utils import postprocess_score
 from externals.PM2S.pm2s import CRNNJointPM2S
 import subprocess
+import warnings
 from pathlib import Path
 import librosa
 import tempfile
@@ -20,6 +21,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import shutil
 import mido
+import copy
 from constants import MUSESCORE_PATH, LD_PATH
 import os
 from typing import Union, Iterable
@@ -42,6 +44,14 @@ from scipy.interpolate import interp1d
 import zipfile
 from fractions import Fraction
 from copy import deepcopy
+from lxml import etree
+import partitura as pt
+from partitura.io.exportmusicxml import (
+    linearize_measure_contents,
+    MEASURE_SEP_COMMENT,
+    DOCTYPE,
+    filter_string,
+)
 
 # Define PathLike
 PathLike = Union[str, bytes, os.PathLike, Path]
@@ -49,7 +59,7 @@ PathLike = Union[str, bytes, os.PathLike, Path]
 # ============================
 # Section 1: MIDI Utilities
 # ============================
-def midi_to_csv(midi_obj: pretty_midi.PrettyMIDI):
+def midi_to_csv(midi_obj: pretty_midi.PrettyMIDI) -> pd.DataFrame:
     """
         Convert a pretty MIDI object to a pandas DataFrame and save as csv
 
@@ -65,7 +75,7 @@ def midi_to_csv(midi_obj: pretty_midi.PrettyMIDI):
     df = pd.DataFrame(note_events, columns=['start', 'duration', 'pitch', 'velocity', 'label'])
     return df
 
-def csv_to_list(csv):
+def csv_to_list(csv: str | pd.DataFrame) -> list:
     """
     Convert a csv score file to a list of note events
     Credits: `https://link.springer.com/book/10.1007/978-3-030-69808-9`
@@ -213,7 +223,8 @@ def visualize_piano_roll_spect(score: list, spect: np.ndarray, freqs: np.ndarray
                          colors: str='viridis', velocity_alpha: bool=False, min_pitch: int = 21, max_pitch: int = 108,
                          figsize: tuple=(16, 8), ax=None, dpi: int=300, save=True):
     """
-        Plot a pianoroll visualization
+        Plot a pianoroll visualization and overlay
+        with a spectrogram.
 
         Args:
             score (list): List of note events
@@ -284,7 +295,7 @@ def visualize_piano_roll_spect(score: list, spect: np.ndarray, freqs: np.ndarray
     yticks = np.arange(min_pitch, max_pitch + 1)
     yticks_labels = [pretty_midi.utilities.note_number_to_name(p) for p in yticks]
     ax.set_ylim([min_pitch - 1.5, max_pitch + 1.5])
-    ax.set_xlim([min(time_min, 0), time_max + 0.5])
+    ax.set_xlim([min(time_min, 0), time_max]) # I had time_max + 0.5 before
     ax.set_yticks(yticks)
     ax.set_yticklabels(yticks_labels)
 
@@ -328,7 +339,7 @@ def generate_piano_roll(midi: pretty_midi.PrettyMIDI, output_path: str, \
 
 def generate_piano_roll_spect(midi: pretty_midi.PrettyMIDI, spect: np.ndarray, output_path: str, \
         freqs: np.ndarray, sr: float, min_pitch: int = 21, max_pitch: int=108, \
-        figsize: tuple=(16,10), dpi: int=300, save: bool=True):
+        figsize: tuple=(16,10), dpi: int=300, save: bool=True) -> None:
     """ 
         Generate piano roll with an overlay of
         audio spectrogram!
@@ -351,7 +362,7 @@ def generate_piano_roll_spect(midi: pretty_midi.PrettyMIDI, spect: np.ndarray, o
 # ====================================
 # Section 3: Conversion Utilities
 # ====================================
-def musescore_convert(input_path: str, output_path: str):
+def musescore_convert(input_path: str, output_path: str) -> None:
     """ 
         Performs conversions from one file to another
         using the Musescore application.
@@ -511,7 +522,7 @@ def nakamura_inference(perf_midi_path: str, score_midi_path: str, data_type: str
            f"{score_midi_path}", f"{data_type}"]
     subprocess.run(cmd, cwd="./externals/Nakamura/RQ")
 
-def pm2s_inference(perfm_midi_path: str, score_midi_path: str):
+def pm2s_inference(perfm_midi_path: str, score_midi_path: str) -> None:
     """ 
         Perform inference with PM2S MIDI to score model.
 
@@ -565,7 +576,7 @@ def beyer_midi_xml(midi_file: str, output_path: str) -> None:
     mxl.metadata.composer=''
     mxl.write('musicxml', fp=f'{output_path}', makeNotation=True)
 
-def beyer_mscore_postprocess(midi_path: str, save_path: str=''):
+def beyer_mscore_postprocess(midi_path: str, save_path: str='') -> None:
     """
         Postprocess the mscore generated 
         from the beyer model.
@@ -602,10 +613,70 @@ def beyer_mscore_postprocess(midi_path: str, save_path: str=''):
             new_track.append(msg)
     new_mid.save(save_path)
 
+
+def calc_new_tempo(gt_dur: float, num_units: int):
+    """ 
+        Calculates new tempo based on the ground truth
+        duration and the num of units (quarter notes, 
+        eighth notes etc)
+
+        Args:
+            gt_dur (float): Ground truth duration in seconds
+            num_units (int): Number of symbolic units
+    """
+    bpm = (60 * num_units)/gt_dur
+    return bpm
+
+def postprocess_mscore_speed(pred_mscore: str, gt_mscore: str, out: str):
+    """ 
+        Postprocess the midi score such that it plays at
+        relatively the same pace as the ground truth midi
+        score.
+
+        Args:
+            pred_mscore (str): Predicted quantized MIDI
+            gt_mscore (str): Ground truth quantized MIDI
+        
+        Returns:
+            None
+    """
+    pm_pred = pretty_midi.PrettyMIDI(pred_mscore)
+    pm_gt = pretty_midi.PrettyMIDI(gt_mscore)
+
+    # Get ground truth duration
+    gt_dur = pm_gt.get_end_time()
+
+    # predicted time signature
+    ts_changes = pm_pred.time_signature_changes
+    num = ts_changes[0].numerator
+    den = ts_changes[0].denominator
+
+    # predicted tempo changes)
+    assert len(pm_gt.get_tempo_changes()[0])==1, "We should have only one tempo change."
+    new_tempo = calc_new_tempo(gt_dur, len(pm_pred.get_beats()))
+
+    # predicted tempo
+    tempo = mido.bpm2tempo(new_tempo, time_signature=(num, den))
+
+    mid = mido.MidiFile(pred_mscore)
+    new_mid = mido.MidiFile(ticks_per_beat=mid.ticks_per_beat)
+    for i, track in enumerate(mid.tracks):
+        new_track = mido.MidiTrack()
+        new_mid.tracks.append(new_track)
+        if i == 0:
+            new_track.append(mido.MetaMessage('set_tempo', tempo=tempo, time=0))
+        
+        for msg in track:
+            if msg.type == 'set_tempo':
+                continue 
+            new_track.append(msg)
+    new_mid.save(out)
+
 # ============================================
 # Section 5: Audio-to-MIDI Inference Utilities
 # ============================================
-def trans(audioPath: str, confPath: str="./extras/trans_config.conf", weight: str="./externals/Transkun/transkun/pretrained/2.0.pt", \
+def trans(audioPath: str, confPath: str="./extras/trans_config.conf", \
+          weight: str="./externals/Transkun/transkun/pretrained/2.0.pt", \
           segmentHopSize: Optional[float]=None, segmentSize: Optional[float]=None):
     """ 
         Transcribes an audio file using the transkun model
@@ -652,7 +723,8 @@ def trans(audioPath: str, confPath: str="./extras/trans_config.conf", weight: st
 
     x = torch.from_numpy(audio).to(device)
 
-    notesEst = model.transcribe(x, stepInSecond=segmentHopSize, segmentSizeInSecond=segmentSize, discardSecondHalf=False)
+    notesEst = model.transcribe(x, stepInSecond=segmentHopSize, \
+        segmentSizeInSecond=segmentSize, discardSecondHalf=False)
 
     outputMidi = writeMidi(notesEst)
     return outputMidi
@@ -848,7 +920,7 @@ def compareFramewise(intervalEst, intervalGT, countZero=True):
 
     return nGT,nEst, nIntersected
 
-def compute_activation_metrics(pred: str|pretty_midi.PrettyMIDI, gt: str|pretty_midi.PrettyMIDI):
+def compute_activation_metrics(pred: str|pretty_midi.PrettyMIDI, gt: str|pretty_midi.PrettyMIDI)-> tuple:
     """ 
         Computes the activation-level metrics. 
         Note that this does not extend pedals as is
@@ -943,11 +1015,24 @@ def score_similarity_normalized(est, gt, full=False):
     return new_sim
 
 # Calculate scoreSimilarity metric and return a dict
-def scoreSim(gt_xml: str, pred_xml) -> dict:
+def scoreSim(gt_xml: str, pred_xml: str) -> dict | None:
+    """ 
+        Calculate scoreSimilarity metric and return a
+        dictionary of the results.
+
+        Args:
+            gt_xml (str): Path to ground truth xml file
+            pred_xml (str): Path to predicted xml file
+
+        Returns:
+            metrics_dict_scoresim (dict): Dictionary of results
+    """
     # instantiate our result dict
     metrics_dict_scoresim = {'e_miss': 0, 'e_extra': 0, 'e_dur': 0,\
         'e_staff': 0, 'e_stem': 0, 'e_spell': 0}
 
+    valid_keys = ['NoteDeletion', 'NoteInsertion', 'NoteDuration', \
+                  'StaffAssignment', 'StemDirection', 'NoteSpelling']
     # Calculate the score similarity metrics
     sim = score_similarity_normalized(pred_xml, gt_xml, full=False)
 
@@ -963,7 +1048,14 @@ def scoreSim(gt_xml: str, pred_xml) -> dict:
 
 def scoreMuster(gt_xml: str, pred_xml) -> dict:
     """
-        Calculates the scores for one pair of files.
+        Calculates the Muster score for one pair of files.
+
+        Args:
+            gt_xml (str): Ground truth xml file
+            pred_xml (str): Predicted xml file
+        
+        Returns:
+            metrics_dict_muster (dict): Calculated muster metrics
     """
     # instaniate our result dict
     metrics_dict_muster = {'e_p': 0, 'e_miss': 0, 'e_extra': 0, 'e_onset': 0, 'e_offset': 0}
@@ -992,9 +1084,11 @@ def mv2h_eval(gt_midi: str, pred_midi: str) -> dict:
         MV2H metrics.
 
         Args:
-        -----
             gt_midi (str): Ground truth MIDI score
             pred_midi (str): Predicted MIDI score
+
+        Returns:
+            res_dict (dict): Dictionary of MV2H results
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         suffix_gt = str(Path(gt_midi).suffix)[1:]
@@ -1240,120 +1334,6 @@ def get_xml_score_revamp(score: m21.stream.Score, measure_nums: list, key_sig: l
 
     return new_score
 
-def get_xml_score(score: m21.stream.Score, measure_nums: list, key_sig: list, time_sig: list, tempos: list) -> m21.stream.Score:
-    """
-        Gets measures from a ground truth score and
-        returns this as a new score.
-
-        Args:
-        ------
-            score (m21.stream.Score): Ground truth score 
-            measure_nums (list): Measures to extract
-            key_sig (list): List of key signature changes
-            time_sig (list): List of time signature changes
-            tempos (list): List of tempos
-
-        Returns:
-        --------
-            new_score (m21.stream.Score): Returns the new score
-    """
-    # We might run into problems because of pickups
-    first_measure = score.parts[0].getElementsByClass(m21.stream.Measure).first()
-    has_pickup = (first_measure is not None) and (first_measure.number == 0)
-    if has_pickup:
-        print("Warning! Piece has pickup. Adjusting Measure Numbers....")
-        measure_nums = [measure_nums[0]-1, measure_nums[-1]-1]
-
-    # load the xml file with music21
-    parts = list(score.parts)
-    new_score = m21.stream.Score()
-
-    for p in parts:
-        # create a new part 
-        new_part = m21.stream.Part()
-        new_part.id = p.id
-        
-        for idx, measure_num in enumerate(range(measure_nums[0], measure_nums[-1] + 1)):
-            m = p.measure(measure_num)
-            new_m = m21.stream.Measure(number=idx+1) # new measure
-
-            # if a tempo marking exists in the measure we will capture it, 
-            # But that is not often the case
-            # comment below later if tempo list being passed does not work
-            # tempo_markings = m.getContextByClass(m21.tempo.MetronomeMark)
-            # if tempo_markings:
-            #     if tempo_markings not in m.recurse().getElementsByClass(m21.tempo.MetronomeMark):
-            #         #m.insert(0, tempo_markings)
-            #         new_m.insert(0, tempo_markings)
-
-            if idx == 0:
-                clef = m.getContextByClass(m21.clef.Clef)
-                # insert clef at the beginning of the measure
-                if clef:
-                    if clef not in m.recurse().getElementsByClass(m21.clef.Clef):
-                        #m.insert(0, clef)
-                        new_m.insert(0, clef)
-                else:
-                    print(f"Warning: No clef found in measure {measure_num} of part {p.id}")
-
-
-            # create time signature and key signature objects at the beginning of the measure
-            if idx == 0:
-                ts = m21.meter.TimeSignature(time_sig[idx][0])
-                ks = m21.key.KeySignature(key_sig[idx][1])
-                if ts.numerator % 3 == 0 and ts.numerator >= 6:
-                    referent = m21.note.Note(type='quarter', dots=1)
-                else:
-                    denom_map = {
-                        1: 'whole',
-                        2: 'half',
-                        4: 'quarter',
-                        8: 'eighth'
-                    }
-                    referent = m21.note.Note(type=denom_map[ts.denominator])
-                tempo = m21.tempo.MetronomeMark(numberSounding=tempos[0], referent=referent)
-                # m.insert(0, ts)
-                # m.insert(0, ks)
-                new_m.insert(0, ts)
-                new_m.insert(0, ks)
-                new_m.insert(0, tempo)
-            else:
-                # Create time and signature objects only if they change
-                if time_sig[idx] != time_sig[idx-1]:
-                    ts = m21.meter.TimeSignature(time_sig[idx][0])
-                    #m.insert(0, ts)
-                    new_m.insert(0, ts)
-                if key_sig[idx] != key_sig[idx-1]:
-                    ks = m21.key.KeySignature(key_sig[idx][1])
-                    #m.insert(0, ks)
-                    new_m.insert(0, ks)
-            
-            for el in m:
-                if isinstance(el, m21.stream.Voice):
-                    voice = m21.stream.Voice()
-                    for item in el:
-                        voice.insert(item.offset, item)
-                    assert voice.isWellFormedNotation()
-                    new_m.insert(el.offset, voice)
-                else:
-                    new_m.insert(el.offset, el)
-            
-            # voices = set()
-            # for el in m:
-            #     if isinstance(el, m21.stream.Voice):
-            #         voices.add(el._id)
-            
-            # # This seems to fix MUSTER bug. Test extensively later on...
-            # voice_map = {old: new for new, old in enumerate(sorted(list(voices)), start=1)}
-            # for el in m:
-            #     if isinstance(el, m21.stream.Voice):
-            #         el._id = voice_map[el._id]
-
-            #new_part.append(m)
-            new_part.append(new_m)
-        new_score.append(new_part)
-    return new_score
-
 def add_tempo_to_midi(midi_path: str, tempo: float, ts: tuple, save_path: str=''):
     """
         Adds tempo to a MIDI file. 
@@ -1407,14 +1387,812 @@ def midi2audio(midi_obj, fs=16000, sf2_path="soundfonts/MuseScore_General.sf2") 
                 sf2_path=sf2_path)
     return audio_data
 
+def gen_midi_from_notes(framed_midi: list) -> pretty_midi.PrettyMIDI:
+    """
+        Generate MIDI file from list of note events.
+
+        Args:
+        -----
+            framed_midi (list): List of note events for a frame which
+                                can be a couple of measures long
+
+        Returns:
+        --------
+            framed_midi_obj (pretty_midi.PrettyMIDI): PrettyMIDI object
+    """
+    framed_midi_obj = pretty_midi.PrettyMIDI()
+    piano_program = pretty_midi.instrument_name_to_program('Acoustic Grand Piano')
+    piano = pretty_midi.Instrument(program=piano_program)
+    for event in framed_midi:
+        note = pretty_midi.Note(velocity=int(event[3]), pitch=int(event[2]), start=event[0], end=event[1])
+        piano.notes.append(note)
+    framed_midi_obj.instruments.append(piano)
+    return framed_midi_obj
+
+# calculate a vector for midi_score (ms) based on inter onset-time interval
+def iot_list(x: list, max_time: float):
+    """ 
+        Calcuates the inter-onset time interval
+        for a given list of onset times and returns
+        a normalized vector based on the max_time.
+
+        Args:
+            x (list): List of onset times
+            max_time (float): Max time for the MIDI sequence
+
+        Returns
+            vector (np.ndarray): A vector containing inter-onset time intervals
+    """
+    vector = []
+    for i in range(len(x)):
+        if i+1 < len(x):
+            vector.append((x[i+1][0] - x[i][0])/max_time)
+    return np.array(vector)
+
+# def get_aligned_midi(m: pretty_midi.PrettyMIDI, mscore: pretty_midi.PrettyMIDI, start: float, end: float):
+#     """ 
+#         This extracts the notes in a MIDI file given
+#         the start and end time. It also ensures that
+#         the MIDI note events are synchronized to the 
+#         score.
+
+#         Args:
+#             m (pretty_midi.PrettyMIDI): P-MIDI pretty_midi object
+#             mscore (pretty_midi.PrettyMIDI): Quantized MIDI score pretty_midi object
+#             start (float): Start time under consideration
+#             end (float): end time under consideration
+
+#         Returns:
+#             note_events_arr (np.ndarray): Final array of note events for P-MIDI
+#     """
+#     # Get the notes in the MIDI file between start and end
+#     # Create dictionaries for P-MIDI and quantized MIDI score
+#     note_events = defaultdict(list) # key is the pitch, value are all the Notes for that pitch
+#     note_events_score = defaultdict(list) # for the quantized MIDI score
+
+#     m_hash = {} # hash map for MIDI file to store frequency of pitch classe
+#     max_time_midi = 0
+#     for instrument in m.instruments:
+#         if not instrument.is_drum:
+#             for note in instrument.notes:
+#                 if note.start >= end or note.end <= start:
+#                     continue
+
+#                 pitch = note.pitch
+#                 velocity = note.velocity
+#                 onset = max(note.start.item(), start) - start 
+#                 offset = min(note.end.item(), end) - start
+#                 note_events[pitch].append([onset, offset, pitch, velocity])
+
+#                 # add to hashmap
+#                 m_hash[pitch] = m_hash.get(pitch, 0) + 1
+#                 max_time_midi = max(max_time_midi, offset)
+    
+#     # parse the MIDI score file as well (we assume this starts from 0 to end of file)
+#     max_time_mscore = mscore.get_end_time()
+#     mscore_hash = {}
+#     for instrument in mscore.instruments:
+#         if not instrument.is_drum:
+#             for note in instrument.notes:
+#                 mscore_hash[note.pitch] = mscore_hash.get(note.pitch, 0) + 1
+#                 note_events_score[note.pitch].append([note.start.item(), note.end.item(), note.pitch, note.velocity])
+
+#     # find the culprit
+#     missing = [] # missing pitches in ground truth quantized midi score
+#     for p in m_hash.keys():
+#         if p not in mscore_hash:
+#             # missing pitches means performer made a mistake (it happens apparently..)
+#             warnings.warn(f"{p} in MIDI but not in MIDI score.")
+#             missing.append(p)
+#             continue
+            
+#         # check if the pitch class exists in both MIDI and MIDI score
+#         valid = m_hash[p] == mscore_hash[p]
+#         if not valid:
+#             # if they are not the same number
+#             # check if the MIDI has lesser occurrences
+#             # if it does, this is probably fine and has to do with Musescore making a long
+#             # note into multiple notes when generating the quantized MIDI score from xml score
+#             # hence we consider only when midi notes exceed the MIDI score
+#             # since equality has been considered above
+#             if m_hash[p] > mscore_hash[p]:
+#                 # it means our midi notes are more
+#                 diff = m_hash[p] - mscore_hash[p]
+
+#                 # if the diff is more than 2, something is wrong with the MIDI file
+#                 # ideally, we should have max of 2 for each pitch class otherwise we question
+#                 # the accuracy of the annotations
+#                 if diff > 2 or diff < 0:
+#                     raise RuntimeError(f"Difference in number of notes wrt to MIDI score is weird for P-MIDI for pitch class {p}")
+                
+#                 if diff == 1:
+#                     note_events[p].sort(key=lambda x: x[0])
+#                     gt_vec = iot_list(note_events_score[p], max_time_mscore)
+#                     possible_seqs = [note_events[p][:-1], note_events[p][1:]]
+#                     norms = []
+#                     for seq in possible_seqs:
+#                         pred_vec = iot_list(seq, max_time_midi)
+#                         norms.append(np.linalg.norm(gt_vec - pred_vec).item())
+#                     idx = np.argmin(norms).item()
+#                     note_events[p] = possible_seqs[idx]
+#                 else:
+#                     # diff is 2
+#                     # sort the note events by onset time
+#                     note_events[p].sort(key=lambda x: x[0])
+
+#                     # remove the first and last note events
+#                     note_events[p] = note_events[p][1:-1]
+    
+#     # delete missing notes
+#     for p in missing:
+#         del note_events[p]
+        
+#     note_events_arr = []
+#     for k in note_events:
+#         for note in note_events[k]:
+#             note_events_arr.append(note)
+#     return np.array(note_events_arr)
+
+
+def extract_notes_from_score(score: m21.stream):
+    """ 
+        Extracts note events from a 
+        musicxml file
+
+        Args:
+            score (m21.stream): Music21 stream
+
+        Returns:
+            note_events (dict): A dictionary of note events
+            freq (dict): Frequency of pitch classes
+            max_time (float): maximum time of notes in the score
+    """
+    note_events = defaultdict(list)
+    freq = {}
+    max_time = 0
+
+    # flatten the score
+    flat_score = score.flatten()
+    for el in flat_score.notes:
+        if isinstance(el, m21.note.Note):
+            onset = el.offset
+            offset = el.duration.quarterLength + onset 
+            note_events[el.pitch.midi].append([
+                onset, offset, el.pitch.midi, 127
+            ])
+            max_time = max(max_time, offset)
+            freq[el.pitch.midi] = freq.get(el.pitch.midi, 0) + 1
+        elif isinstance(el, m21.chord.Chord):
+            onset = el.offset 
+            offset = el.duration.quarterLength + onset
+            for p in el.pitches:
+                note_events[p.midi].append([
+                    onset, offset, p.midi, 127
+                ])
+                freq[p.midi] = freq.get(p.midi, 0) + 1
+            max_time = max(max_time, offset)
+    
+    return note_events, freq, max_time
+
+def pt_extract_notes_from_score(score_path: str):
+    """ 
+        Similar to extract_notes_from_score but
+        based on partitura.
+    """
+    score = pt.load_musicxml(score_path)
+    note_arr = score.note_array()
+    note_events = defaultdict(list)
+    freq = {}
+    max_time = 0
+
+    for note in note_arr:
+        onset = note[0]
+        dur = note[1]
+        pitch = note[6]
+        offset = onset + dur
+        note_events[pitch].append([onset, offset, pitch, 127])
+        max_time = max(max_time, offset)
+        freq[pitch] = freq.get(pitch, 0) + 1
+
+    return note_events, freq, max_time
+
+def get_aligned_midi_from_score(m: pretty_midi.PrettyMIDI, score: m21.stream, start: float, end: float):
+    """ 
+        This extracts the notes in a MIDI file given
+        the start and end time. It also ensures that
+        the MIDI note events are synchronized to the 
+        score.
+
+        Args:
+            m (pretty_midi.PrettyMIDI): P-MIDI pretty_midi object
+            score (m21.stream): Music 21 stream
+            start (float): Start time under consideration
+            end (float): end time under consideration
+
+        Returns:
+            note_events_arr (np.ndarray): Final array of note events for P-MIDI
+    """
+    # Get the notes in the MIDI file between start and end
+    # Create dictionaries for P-MIDI and score
+    note_events = defaultdict(list) # key is the pitch, value are all the Notes for that pitch
+    note_events_score, score_hash, max_time_score = extract_notes_from_score(score)
+
+    m_hash = {} # hash map for MIDI file to store frequency of pitch classe
+    max_time_midi = 0
+    for instrument in m.instruments:
+        if not instrument.is_drum:
+            for note in instrument.notes:
+                if note.start >= end or note.end <= start:
+                    continue
+                
+                pitch = note.pitch
+                velocity = note.velocity
+                onset = max(note.start.item(), start) - start 
+                offset = min(note.end.item(), end) - start
+                note_events[pitch].append([onset, offset, pitch, velocity])
+
+                # add to hashmap
+                m_hash[pitch] = m_hash.get(pitch, 0) + 1
+                max_time_midi = max(max_time_midi, offset)
+
+    # There are two kind of errors
+    # insertion: note present in performance MIDI but not in score (could be a boundary
+    # artifiact or a mistake from the performer)
+    # deletion: note present in score but not in performance MIDI
+
+    # The above errors can occur on a pitch class level and on a temporal level.
+    # if it is an insertion on a pitch class level, we delete this since our score
+    # is the ground truth and the basis for all we will do
+    insertion_pitch_level = []
+    for p in note_events:
+        if p not in score_hash:
+            insertion_pitch_level.append(p)
+    
+    for p in insertion_pitch_level:
+        del note_events[p]
+        del m_hash[p]
+
+    # if it is a deletion on a pitch class level, there is absolutely nothing
+    # we can do about that except wipe that off from the score. 
+    # I did some preprocessing in get_xml_score but you never know; so we throw
+    # an error in case things go wrong!
+    del_pitch_level = []
+    for p in score_hash:
+        if p not in note_events:
+            del_pitch_level.append(p)
+            raise RuntimeError(f"Pitch class in score but not in P-MIDI: {p}")
+
+    # Now we go to the temporal domain
+    # Note that here we focus on insertions on a temporal level since
+    # our goal is to fix the p-MIDI and not the score. If we fix the
+    # score, then deletions on a temporal level would have to be considered
+    # since we have a function that deals with the deletions, we will throw
+    # an error if we didn't catch it. We might not catch it for several reasons
+    # e.g: quality of the match file
+    insertion_temp_level = []
+    del_temp_level = []
+    for p in note_events:
+        if len(note_events[p]) > len(note_events_score[p]):
+            insertion_temp_level.append(p)
+        elif (len(note_events[p]) < len(note_events_score[p])):
+            # there are notes temporally speaking for a particular pitch class that exist in 
+            # the score but not in the p-midi. For now, we throw an error if this happens
+            del_temp_level.append(p)
+            raise RuntimeError(f"Some notes for a certain pitch class {\
+                p} are in score but not in P-MIDI. [SCORE COUNT]: {len(note_events_score[p])\
+                } and [P-MIDI COUNT]: {len(note_events[p])}")
+    
+    for p in insertion_temp_level:
+        # chech the number of insertions
+        num_insertions = m_hash[p] - score_hash[p]
+
+        # if the num of insertions are more than 2, then these are performance errors 
+        # and not boundary artifacts, so throw an error
+        if num_insertions > 2:
+            # This can happen when performance is diff from g.t score (see Shi05M.mid at measure 22)
+            # for Bach_fugue_bwv_846! Classic example. So, in this case, throw an error and deal with
+            # the exception
+            raise RuntimeError(f"[ALERT]: More than 2 temporal insertions for pitch class {p} detected.")
+        
+        if num_insertions == 1:
+            # here, it means we have a boundary artifact at the beginning
+            # or at the end.
+            note_events[p].sort(key=lambda x: x[0])
+            gt_vec = iot_list(note_events_score[p], max_time_score)
+            possible_seqs = [note_events[p][:-1], note_events[p][1:]]
+            norms = []
+            for seq in possible_seqs:
+                pred_vec = iot_list(seq, max_time_midi)
+                norms.append(np.linalg.norm(gt_vec - pred_vec).item())
+            idx = np.argmin(norms).item()
+            note_events[p] = possible_seqs[idx]
+        else:
+            # num_insertions is 2; means we have the two boundary artifacts at
+            # beginning and end
+            # sort the note events by onset time
+            note_events[p].sort(key=lambda x: x[0])
+
+            # remove the first and last note events
+            note_events[p] = note_events[p][1:-1]
+        
+    note_events_arr = []
+    for k in note_events:
+        for note in note_events[k]:
+            note_events_arr.append(note)
+    return np.array(note_events_arr)
+
+class Spanner:
+    """ 
+        Spanner class to host spanner objects in
+        music 21 when extracting windowed segments.
+    """
+    def __init__(self, spanner_obj:m21.spanner.Spanner):
+        """ 
+            Args:
+                spanner_obj (m21.spanner.Spanner): Music21 spanner object
+        """
+        self.id_map = {} # maps ids between old and new spanner objects
+        self.old_span = {} # maps id of old spanner to its object
+        self.new_span = {} # maps id of new spanner to its object 
+        spanned_elements = spanner_obj.getSpannedElements()
+        self.type = type(spanner_obj)
+        self.count = 0
+        self.transposing = False # this is used to deal with ottava spanners
+        self.placement = None # this is for dynamic spanners
+
+        if isinstance(spanner_obj, m21.spanner.Ottava):
+            self.transposing = spanner_obj.transposing
+        elif isinstance(spanner_obj, m21.dynamics.Dynamic):
+            self.placement = spanner_obj.placement
+        
+        for el in spanned_elements:
+            self.id_map[id(el)] = None
+            self.old_span[id(el)] = el
+    
+    def check(self, element_id: int) -> bool:
+        """ 
+            Checks if the id of the element has been
+            seen. This means this spanner is connected
+            to the element with the associated id.
+
+            Args:
+                element_id (int): Id of element; basically
+                the memory address
+        """
+        if element_id in self.id_map:
+            return True 
+        return False
+    
+    def add(self, old_element_id, new_element_id, new_element):
+        if self.check(old_element_id):
+            self.id_map[old_element_id] = new_element_id
+            self.new_span[new_element_id] = new_element
+            self.count += 1
+    
+    def valid(self):
+        if self.count > 0:
+            return True
+        return False
+
+
+def get_xml_score(score: m21.stream.Score, measure_nums: list, \
+        key_sig: list, time_sig: list, tempos: list) -> m21.stream.Score:
+    """
+        Gets measures from a ground truth score and
+        returns this as a new score.
+
+        Args:
+        ------
+            score (m21.stream.Score): Ground truth score 
+            measure_nums (list): Measures to extract
+            key_sig (list): List of key signature changes
+            time_sig (list): List of time signature changes
+            tempos (list): List of tempos
+
+        Returns:
+        --------
+            new_score (m21.stream.Score): Returns the new score
+    """
+    # We might run into problems because of pickups
+    first_measure = score.parts[0].getElementsByClass(m21.stream.Measure).first()
+    has_pickup = (first_measure is not None) and (first_measure.number == 0)
+    if has_pickup:
+        print("Warning! Piece has pickup. Adjusting Measure Numbers....")
+        measure_nums = [measure_nums[0]-1, measure_nums[-1]-1]
+
+    # load the xml file with music21
+    parts = list(score.parts)
+    new_score = m21.stream.Score()
+    score_recurse = score.recurse() # recurse all elements in the score (useful later on)
+
+    for p_idx, p in enumerate(parts):
+        # create a new part 
+        new_part = m21.stream.PartStaff()
+        new_part.id = p.id
+
+        # Get the main spanner objects of interest (includes slurs and Ottavas)
+        # for the part
+        spanners = []
+        for el in score_recurse:
+            # Doing the recursion on the score rather than the parts allows us
+            # get the spanner elements appropriately; for some weird reason, doing
+            # this on the parts do not work for music21: not sure why...especially
+            # the slurs, ids do not match any note we recurse in the element if done
+            # from the parts
+            if isinstance(el, m21.spanner.Slur) or isinstance(el, m21.spanner.Spanner):
+                spanners.append(Spanner(el))
+
+        for idx, measure_num in enumerate(range(measure_nums[0], measure_nums[-1] + 1)):
+            m = p.measure(measure_num)
+            new_m = m21.stream.Measure(number=idx+1) # new measure
+
+            # if a tempo marking exists in the measure we will capture it, 
+            # But that is not often the case
+            denom_map = {
+                    1: 'whole',
+                    2: 'half',
+                    4: 'quarter',
+                    8: 'eighth',
+                    16: '16th',
+                    32: '32nd'
+                }
+            
+            # Rather than writing complex logic, we just use the 
+            # tempos list
+            if p_idx == 0:
+                ts_temp = m21.meter.TimeSignature(time_sig[idx][0])
+                referent = m21.note.Note(type=denom_map[ts_temp.denominator])
+                
+                if idx < len(tempos):
+                    tempo_val = tempos[idx]
+                else:
+                    tempo_val = tempos[-1]
+
+                if idx == 0:
+                    tempo = m21.tempo.MetronomeMark(numberSounding=tempo_val, referent=referent)
+                    new_m.insert(0, tempo)
+                else:
+                    if idx > 0 and idx < len(tempos):
+                        if tempos[idx] != tempos[idx-1]:
+                            tempo = m21.tempo.MetronomeMark(numberSounding=tempo_val, referent=referent)
+                            new_m.insert(0, tempo)
+
+            if idx == 0:
+                clef = m.getContextByClass(m21.clef.Clef)
+                # insert clef at the beginning of the measure
+                if clef:
+                    if clef not in m.recurse().getElementsByClass(m21.clef.Clef):
+                        new_m.insert(0, clef)
+                else:
+                    # means we are probbaly at beginning of the piece specifically
+                    print(f"Warning: No clef found in measure {measure_num} of part {p.id}")
+
+
+            # create time signature and key signature objects at the beginning of the measure
+            # This assumes all the scores have tempo markings for the remainder of the measures
+            if idx == 0:
+                ts = m21.meter.TimeSignature(time_sig[idx][0])
+                ks = m21.key.KeySignature(key_sig[idx][1])
+                new_m.insert(0, ts)
+                new_m.insert(0, ks)
+            else:
+                # Create time and signature objects only if they change
+                if time_sig[idx] != time_sig[idx-1]:
+                    ts = m21.meter.TimeSignature(time_sig[idx][0])
+                    new_m.insert(0, ts)
+                if key_sig[idx] != key_sig[idx-1]:
+                    ks = m21.key.KeySignature(key_sig[idx][1])
+                    new_m.insert(0, ks)
+            
+            for el in m:
+                if isinstance(el, m21.stream.Voice):
+                    voice = m21.stream.Voice()
+                    for item in el:
+                        new_item = copy.deepcopy(item)
+
+                        # do this on a notelevel for spanners
+                        for s in spanners:
+                            if s.check(id(item)):
+                                s.add(id(item), id(new_item), new_item)
+
+                        voice.insert(item.offset, new_item)
+                    assert voice.isWellFormedNotation()
+                    new_m.insert(el.offset, voice)
+                else:
+                    new_el = copy.deepcopy(el)
+
+                    for s in spanners:
+                        if s.check(id(el)):
+                            s.add(id(el), id(new_el), new_el)
+
+                    new_m.insert(el.offset, new_el)    
+            new_part.append(new_m)
+        
+        # Before appending the part, check if some spanners are valid
+        for s in spanners:
+            if s.valid():
+                # create a new spanner
+                new_s = s.type()
+                if isinstance(new_s, m21.spanner.Ottava):
+                    new_s.transposing = s.transposing
+                elif isinstance(new_s, m21.dynamics.Dynamic):
+                    new_s.placement = s.placement # music21 does some weird stuff here
+
+                for i, k in enumerate(s.new_span.keys()):
+                    if i <= s.count:
+                        # add the new elements in new part to new_s
+                        new_s.addSpannedElements(s.new_span[k])
+                
+                new_part.insert(0, new_s)
+            
+        new_score.insert(0, new_part)
+    
+    # Since it is a piano, we add a StaffGroup
+    # This is important so that dynamic elements like diminuendo and
+    # crescendos will have the right & proper effect.
+    staff_group = m21.layout.StaffGroup([new_score.parts[0], new_score.parts[1]])
+    staff_group.symbol = 'brace'
+    staff_group.barTogether = True
+
+    new_score.insert(0, staff_group)
+    return new_score
+
+def get_deletions(mf_path: str):
+    _, alignment, score = pt.load_match(mf_path, create_score=True)
+    ids = []
+    for each in alignment:
+        if each["label"] == "deletion":
+            ids.append(each["score_id"].rsplit("-", 1)[0]) # -2 to remove the -1 attached to id
+    return set(ids)
+
+def delete_note(del_notes: dict, item: m21.note.Note | m21.chord.Chord):
+    """ 
+        This is an helper function that helps in
+        deleting notes from a score. 
+
+        Args:
+            del_notes (set): Notes to be deleted from the score
+            item (m21.note.Note | m21.chord.Chord): Ground truth note or chord element under
+                                                    consideration.
+    """
+    if isinstance(item, m21.note.Note):
+        item_id = item.editorial["misc"]["musicxml_note_id"]
+        if item_id in del_notes:
+            return m21.note.Rest(quarterLength=item.duration.quarterLength)
+        else:
+            return copy.deepcopy(item)
+    elif isinstance(item, m21.chord.Chord):
+        keep_names = []
+        for n in item:
+            n_id = n.editorial["misc"]["musicxml_note_id"]
+            if n_id not in del_notes:
+                keep_names.append(n.nameWithOctave)
+        
+        if len(keep_names) == 0:
+            return m21.note.Rest(quarterLength=item.duration.quarterLength)
+        else:
+            return m21.chord.Chord(keep_names, duration=item.duration)
+
+def get_xml_score_del(score: m21.stream.Score, measure_nums: list, \
+                      key_sig: list, time_sig: list, tempos: list, wrong_notes: set) -> m21.stream.Score:
+    """
+        Gets measures from a ground truth score and
+        returns this as a new score. However, it does so
+        while considering wrong notes in the score which
+        are obtained from a match file.
+
+        Args:
+        ------
+            score (m21.stream.Score): Ground truth score 
+            measure_nums (list): Measures to extract
+            key_sig (list): List of key signature changes
+            time_sig (list): List of time signature changes
+            tempos (list): List of tempos
+            wrong_notes (set): set of notes to delete.
+            
+        Returns:
+        --------
+            new_score (m21.stream.Score): Returns the new score
+    """
+    # We might run into problems because of pickups
+    first_measure = score.parts[0].getElementsByClass(m21.stream.Measure).first()
+    has_pickup = (first_measure is not None) and (first_measure.number == 0)
+    if has_pickup:
+        print("Warning! Piece has pickup. Adjusting Measure Numbers....")
+        measure_nums = [measure_nums[0]-1, measure_nums[-1]-1]
+
+    # load the xml file with music21
+    parts = list(score.parts)
+    new_score = m21.stream.Score()
+    score_recurse = score.recurse() # recurse all elements in the score (useful later on)
+
+    for p_idx, p in enumerate(parts):
+        # create a new part 
+        new_part = m21.stream.PartStaff()
+        new_part.id = p.id
+
+        # Get the main spanner objects of interest (includes slurs and Ottavas)
+        # for the part
+        spanners = []
+        for el in score_recurse:
+            # Doing the recursion on the score rather than the parts allows us
+            # get the spanner elements appropriately; for some weird reason, doing
+            # this on the parts do not work for music21: not sure why...especially
+            # the slurs, ids do not match any note we recurse in the element if done
+            # from the parts
+            if isinstance(el, m21.spanner.Slur) or isinstance(el, m21.spanner.Spanner):
+                spanners.append(Spanner(el))
+
+        for idx, measure_num in enumerate(range(measure_nums[0], measure_nums[-1] + 1)):
+            m = p.measure(measure_num)
+            new_m = m21.stream.Measure(number=idx+1) # new measure
+
+            # if a tempo marking exists in the measure we will capture it, 
+            # But that is not often the case
+            denom_map = {
+                    1: 'whole',
+                    2: 'half',
+                    4: 'quarter',
+                    8: 'eighth',
+                    16: '16th',
+                    32: '32nd'
+                }
+            
+            # Rather than writing complex logic, we just use the 
+            # tempos list
+            if p_idx == 0:
+                ts_temp = m21.meter.TimeSignature(time_sig[idx][0])
+                referent = m21.note.Note(type=denom_map[ts_temp.denominator])
+
+                if idx == 0:
+                    # set tempo at beginning
+                    tempo_val = tempos[0]
+                    tempo = m21.tempo.MetronomeMark(numberSounding=tempo_val, referent=referent)
+                    new_m.insert(0, tempo)
+                else:
+                    # Past the beginning, only set tempo if tempo changes
+                    if idx < len(tempos):
+                        tempo_val = tempos[idx]
+                        if tempos[idx] != tempos[idx-1]:
+                            tempo = m21.tempo.MetronomeMark(numberSounding=tempo_val, referent=referent)
+                            new_m.insert(0, tempo)
+
+            if idx == 0:
+                clef = m.getContextByClass(m21.clef.Clef)
+                # insert clef at the beginning of the measure
+                if clef:
+                    if clef not in m.recurse().getElementsByClass(m21.clef.Clef):
+                        new_m.insert(0, clef)
+                else:
+                    # means we are probbaly at beginning of the piece specifically
+                    print(f"Warning: No clef found in measure {measure_num} of part {p.id}")
+
+
+            # create time signature and key signature objects at the beginning of the measure
+            # This assumes all the scores have tempo markings for the remainder of the measures
+            if idx == 0:
+                ts = m21.meter.TimeSignature(time_sig[idx][0])
+                ks = m21.key.KeySignature(key_sig[idx][1])
+                new_m.insert(0, ts)
+                new_m.insert(0, ks)
+            else:
+                # Create time and signature objects only if they change
+                if time_sig[idx] != time_sig[idx-1]:
+                    ts = m21.meter.TimeSignature(time_sig[idx][0])
+                    new_m.insert(0, ts)
+                if key_sig[idx] != key_sig[idx-1]:
+                    ks = m21.key.KeySignature(key_sig[idx][1])
+                    new_m.insert(0, ks)
+            
+            for el in m:
+                if isinstance(el, m21.stream.Voice):
+                    voice = m21.stream.Voice()
+                    for item in el:
+                        if isinstance(item, m21.note.Note) or isinstance(item, m21.chord.Chord):
+                            new_item = delete_note(wrong_notes, item)
+                        else:
+                            new_item = copy.deepcopy(item)
+
+                        # do this on a notelevel for spanners
+                        for s in spanners:
+                            if s.check(id(item)):
+                                s.add(id(item), id(new_item), new_item)
+
+                        voice.insert(item.offset, new_item)
+                    assert voice.isWellFormedNotation()
+                    new_m.insert(el.offset, voice)
+                else:
+                    if isinstance(el, m21.note.Note) or isinstance(el, m21.chord.Chord):
+                        new_el = delete_note(wrong_notes, el)
+                    else:
+                        new_el = copy.deepcopy(el)
+
+                    for s in spanners:
+                        if s.check(id(el)):
+                            s.add(id(el), id(new_el), new_el)
+
+                    new_m.insert(el.offset, new_el)    
+            new_part.append(new_m)
+        
+        # Before appending the part, check if some spanners are valid
+        for s in spanners:
+            if s.valid():
+                # create a new spanner
+                new_s = s.type()
+                if isinstance(new_s, m21.spanner.Ottava):
+                    new_s.transposing = s.transposing
+                elif isinstance(new_s, m21.dynamics.Dynamic):
+                    new_s.placement = s.placement # music21 does some weird stuff here
+
+                for i, k in enumerate(s.new_span.keys()):
+                    if i <= s.count:
+                        # add the new elements in new part to new_s
+                        new_s.addSpannedElements(s.new_span[k])
+                
+                new_part.insert(0, new_s)
+            
+        new_score.insert(0, new_part)
+    
+    # Since it is a piano, we add a StaffGroup
+    # This is important so that dynamic elements like diminuendo and
+    # crescendos will have the right & proper effect.
+    staff_group = m21.layout.StaffGroup([new_score.parts[0], new_score.parts[1]])
+    staff_group.symbol = 'brace'
+    staff_group.barTogether = True
+
+    new_score.insert(0, staff_group)
+    return new_score
+
+
+def get_performance(match_file_path : str):
+    perf, alignment, score = pt.load_match(match_file_path, create_score=True)
+    perf_dict = defaultdict(list) # key is the measure and the value is an array
+    perf_id_map = {} # mapping from performance id to performance 
+    align_perf_score = {}
+    align_score_perf = {}
+
+    for each in alignment:
+        if each["label"] == "insertion" or each["label"] == "deletion":
+            continue
+        
+        align_perf_score[each["performance_id"]] = each["score_id"]
+        align_score_perf[each["score_id"]] = each["performance_id"]
+    
+    perf_note_arr = perf.note_array()
+    for i, id in enumerate(perf_note_arr["id"]):
+        if id in align_perf_score: 
+            perf_id_map[id] = perf_note_arr[i]
+    
+    score_note_arr = score.note_array()
+    p = score.parts[0]
+    for i, n in enumerate(score_note_arr):
+        if n["id"] in align_score_perf:
+            mnum = p.measure_number_map(n["onset_div"]).item()
+            perf_obj = perf_id_map[align_score_perf[n["id"]]]
+            perf_dict[mnum].append(perf_obj)
+
+    return perf_dict
+
+def extract_perf_measure(perf_dict: dict, start, end):
+    final_perf = []
+    for mn in range(start, end+1):
+        final_perf.extend(perf_dict[mn])
+    
+    final_perf = np.array(final_perf)
+    min_onset_sec = min(final_perf["onset_sec"])
+    min_onset_ticks = min(final_perf["onset_tick"])
+    final_perf["onset_sec"] = final_perf["onset_sec"] - min_onset_sec
+    final_perf["onset_tick"] = final_perf["onset_tick"] - min_onset_ticks
+    
+    return final_perf
+
+def save_pt_performance_array(perf_arr: np.ndarray):
+    performed_part = pt.performance.PerformedPart.from_note_array(perf_arr)
+    return pt.save_performance_midi(performed_part, out=None)
+
 def get_midi_note_events_strict2(midi: pretty_midi.PrettyMIDI, midi_score: pretty_midi.PrettyMIDI, \
                 start: float, end: float, eps=0.02) -> np.ndarray:
     
-    # get notes from midi_score
-    # midi_score_pitches = set()
-    # for n in midi_score.instruments[0].notes:
-    #     midi_score_pitches.add(n.pitch)
-
     note_events = []
     for instrument in midi.instruments:
         if not instrument.is_drum:
@@ -1431,15 +2209,14 @@ def get_midi_note_events_strict2(midi: pretty_midi.PrettyMIDI, midi_score: prett
                 onset = max(note.start, start) - start 
                 offset = min(note.end, end) - start 
 
-                if offset - onset < eps:
-                    # We don't want those noisy artifacts
-                    continue
+                # if offset - onset < eps:
+                #     # We don't want those noisy artifacts
+                #     continue
 
                 note_events.append([onset, offset, pitch, velocity])
     
     # Get the tempo changes    
     return np.array(note_events)
-
 
 
 def get_midi_note_events_strict(midi: pretty_midi.PrettyMIDI, start: float, end: float) -> np.ndarray:
@@ -1464,16 +2241,6 @@ def get_midi_note_events_strict(midi: pretty_midi.PrettyMIDI, start: float, end:
                 if note.start >= end or note.end <= start:
                     continue 
 
-                # neglect note durations which are about 50ms close to the
-                # end of the segment (it is unlikely to be captured in the audio properly) 
-                # commented below because for the MIDI to score process, we might have to go through
-                # these files manually....and ensure it aligns with the score. We just have to do it
-                # Audio to MIDI is fine...although we might want to remove artifacts at the end also
-                # We will discuss about it. We have no choice if we want this to be perfect
-                # comment below for the final dataset generation
-                if end - note.start < 0.05:
-                    continue
-
                 pitch = note.pitch
 
                 # Need to deal with the case where the note starts before
@@ -1481,8 +2248,49 @@ def get_midi_note_events_strict(midi: pretty_midi.PrettyMIDI, start: float, end:
                 # Not sure if what I have done below is the right thing to do
                 note_events.append([max(0, note.start - start), min(note.end - start, end - start), pitch, note.velocity])
 
-    # Get the tempo changes    
-    return np.array(note_events)
+    note_events_arr = np.array(note_events)
+
+    return note_events_arr
+
+def get_pedal_events_strict(midi: pretty_midi.PrettyMIDI, start: float, end: float) -> list:
+    """
+        Gets pedal events within a window in a strict
+        manner.
+
+        Args:
+        ------
+            midi (pretty_midi.PrettyMIDI): prettyMIDI object
+            start (float): start time of window
+            end (float): end time of window
+
+        Returns:
+        --------
+            res (np.ndarray): List of pedal events
+    """
+    pedal_events = []
+    pedal_state = 0 
+
+    # First: determine pedal state at window start
+    for inst in midi.instruments:
+        for cc in inst.control_changes:
+            if cc.number == 64 and cc.time <= start:
+                pedal_state = 1 if cc.value >= 64 else 0
+
+    if pedal_state:
+        pedal_events.append((0.0, 127))
+
+    for instrument in midi.instruments:
+        for cc in instrument.control_changes:
+            if cc.number == 64:
+                if cc.time >= end or cc.time <= start:
+                    continue
+                pedal_events.append((cc.time-start, cc.value))
+                pedal_state = 1 if cc.value >= 64 else 0
+    
+    if pedal_state:
+        pedal_events.append((end-start, 0))
+
+    return pedal_events
 
 def get_tsig_changes(midi: pretty_midi.PrettyMIDI, start: float, \
         end: float) -> list:
@@ -1646,6 +2454,352 @@ def merge_midi(midi_in: str, midi_out: str):
     midi_merged.instruments.append(inst)
     midi_merged.write(midi_out)
     return midi_merged
+
+# Parse MusicXML files to check for broken ties
+#path = "./data/score_examples/pred_xml/BLINOV04M_m39_beyer.musicxml"
+#path = "./data/xml_score/BLINOV04M_m39.musicxml"
+
+# Algorithm to detect broken ties...
+# Uses a hashmap; memory complexity O(n), time complexity O(n)
+# tie_dict has (key: noteName, value: LinkedList of tie connections)
+
+class LinkedList:
+    def __init__(self, head):
+        self.head = head
+        self.last = head
+    
+    def append(self, node):
+        self.last.next = node
+        self.last = node
+
+class Node:
+    def __init__(self, el, next=None):
+        self.el = el
+        self.next = next
+    
+    def __str__(self):
+        return f"{self.el.nameWithOctave}"
+
+    def __repr__(self):
+        return self.__str__()
+
+def remove_broken_ties(path: str|m21.stream.Stream, output_path: str):
+    if isinstance(path, str):
+        s = m21.converter.parse(path)
+    else:
+        s = path
+
+    broken_ties = []
+    tie_dict = defaultdict(LinkedList)
+    for el in list(s.recurse()):
+        if isinstance(el, m21.note.Note) or isinstance(el, m21.chord.Chord):
+            notes = []
+            if isinstance(el, m21.chord.Chord):
+                for n in el.notes:
+                    notes.append(n)
+            else:
+                notes.append(el)
+            
+            for n in notes:
+                if n.tie is None:
+                    continue
+                tie_type = n.tie.type
+
+                if tie_type == "start":
+                    tie_dict[n.nameWithOctave] = LinkedList(Node(n))
+                
+                if tie_type == "continue":
+                    ll = tie_dict.get(n.nameWithOctave, None)
+                    if ll is None:
+                        # This is a broken tie
+                        broken_ties.append(n)
+                    else:
+                        ll.append(Node(n))
+                
+                if tie_type == "stop":
+                    ll = tie_dict.get(n.nameWithOctave, None)
+                    if ll is None:
+                        # This is a broken tie
+                        broken_ties.append(n)
+                    else:
+                        ll.append(Node(n))
+
+    # Now we have to pass the dict to add elements that have a start tie but no end tie
+    for key in tie_dict.keys():
+        ll = tie_dict[key]
+        last_node = ll.last
+        curr_node = ll.head
+        if last_node.el.tie is None:
+            continue
+        else:
+            tie_type = last_node.el.tie.type
+            if tie_type != "stop":
+                # Add all of the notes from the head node
+                # to broken ties list
+                while curr_node:
+                    broken_ties.append(curr_node.el)
+                    curr_node = curr_node.next
+                    if curr_node is None:
+                        break
+
+    for n in broken_ties:
+        n.tie = None
+
+    s.write('musicxml', fp = f"{output_path}", makeNotation=True)
+
+def merge_score(xml_path: str, store_path: str):
+    s = m21.converter.parse(xml_path)
+    rh = m21.stream.Part()
+    lh = m21.stream.Part()
+
+    # Append treble clefs and bass clefs
+    rh.insert(0, m21.clef.TrebleClef())
+    lh.insert(0, m21.clef.BassClef())
+
+    parts = list(s.parts)
+    assert len(parts) == 4, "Only four (4) parts are acceptable."
+
+    for i in range(2):
+        # i = 0 will be for rh
+        # i = 1 will be for lh
+        if i == 0:
+            voice1 = parts[i]
+            voice2 = parts[i+1]
+        else:
+            voice1 = parts[i+1]
+            voice2 = parts[i+2]
+        
+        # Now we need to merge these two voices into one voice
+        mv1 = voice1.getElementsByClass('Measure')
+        mv2 = voice2.getElementsByClass('Measure')
+        assert len(mv1) == len(mv2), "Voice measures should be equal!"
+
+        for j in range(len(mv1)-2): # skip the last two measures for now
+            # Get the jth measure for each voice
+            m1 = mv1[j]
+            m2 = mv2[j]
+            v1 = m21.stream.Voice()
+            v2 = m21.stream.Voice()
+            new_m = m21.stream.Measure(number=j+1)
+
+            if len(m1.getElementsByClass([m21.note.Note, m21.chord.Chord])) > 0:
+                for el in m1:
+                    if isinstance(el, m21.clef.Clef):
+                        continue
+                    elif isinstance(el, m21.key.KeySignature) or isinstance(el, m21.meter.TimeSignature):
+                        new_m.insert(el.offset, deepcopy(el))
+                    else:
+                        if isinstance(el, m21.note.Note):
+                            el.stemDirection = 'unspecified'
+                        
+                        if isinstance(el, m21.tempo.MetronomeMark):
+                            new = m21.tempo.MetronomeMark(numberSounding=el.number)
+                            new.style.hideObjectOnPrint = True
+                            new_m.insert(el.offset, new)
+                            continue
+                        
+                        v1.insert(el.offset, deepcopy(el))
+            
+            if len(m2.getElementsByClass([m21.note.Note, m21.chord.Chord])) > 0:
+                for el in m2:
+                    if isinstance(el, m21.clef.Clef):
+                        continue
+                    elif isinstance(el, m21.key.KeySignature) or isinstance(el, m21.meter.TimeSignature):
+                        new_m.insert(el.offset, deepcopy(el))
+                    else:
+                        if isinstance(el, m21.note.Note):
+                            el.stemDirection = 'unspecified'
+
+                        if isinstance(el, m21.tempo.MetronomeMark):
+                            new = m21.tempo.MetronomeMark(numberSounding=el.number)
+                            new.style.hideObjectOnPrint = True
+                            new_m.insert(el.offset, new)
+                            continue
+
+                        v2.insert(el.offset, deepcopy(el))
+            
+            if len(v1) > 0:
+                new_m.insert(0, v1)
+            if len(v2) > 0:
+                new_m.insert(0, v2)
+
+            if i == 0:
+                rh.append(new_m)
+            else:
+                lh.append(new_m)
+    
+    new_score = m21.stream.Score()
+    new_score.append(rh)
+    new_score.append(lh)
+    
+    assert new_score.isWellFormedNotation(), "Stream is not well-formed."
+    new_score.write("musicxml", fp=f"{store_path}", makeNotation=True)
+
+def strip_tempo_markings(xml_path: str, store_path: str):
+    # For scores we postprocess to hide the tempo, the audio
+    # should be generated from the MIDI scores for perceptual 
+    # similarity to the audio
+    s = m21.converter.parse(xml_path)
+
+    # Our goal is to use this function to do some postprocessing
+    # For now, we are looking at hiding tempo markings
+    for el in list(s.recurse().getElementsByClass(m21.tempo.MetronomeMark)):
+        # new_marking = m21.tempo.MetronomeMark(numberSounding=el.number)
+        # new_marking.style.hideObjectOnPrint = True
+
+        # Get site
+        site = el.activeSite
+        site.remove(el)
+    
+    s.metadata = m21.metadata.Metadata(title='')
+    s.metadata.composer=''
+    s.write("musicxml", fp=f"{store_path}")
+
+
+def save_musicxml_window(
+    score_data: pt.score.Score,
+    out: pt.utils.misc.PathLike,
+    measure_start: int,
+    measure_end: int,
+):
+    """
+    Save a window of measures from a partitura Score to MusicXML.
+    Preserves everything exactly (stems, beaming, clefs, voices, etc.)
+    since it uses partitura's own export internals.
+
+    Parameters
+    ----------
+    score_data : partitura.score.Score
+        The full score
+    out : str or path
+        Output file path
+    measure_start : int
+        First measure number to include (inclusive)
+    measure_end : int
+        Last measure number to include (inclusive)
+    """
+    # Get a score instance
+    if not isinstance(score_data, pt.score.Score):
+        score_data = pt.score.Score(id=None, partlist=score_data)
+
+    # create the xml root (musicXML has two formats: score-partwise and score-commonwise)
+    # partitura uses score-partwise or exports score-partwise
+    # so, we have score -> part -> measure etc
+    root = etree.Element("score-partwise")
+    partlist_e = etree.SubElement(root, "part-list") # build partlist header describing instruments
+    state = {"note_id_counter": {}, "range_counter": {}}
+
+    # ── Part-group handling (mirrors partitura's save_musicxml) ──
+    # Tracks open <part-group type="start"> elements so we can emit
+    # matching <part-group type="stop"> elements.  This matters for
+    # multi-part scores where Parts live inside PartGroups (e.g. orchestral
+    # scores, or piano modelled as two separate Parts with a brace).
+    group_stack = []
+
+    def close_group_stack():
+        """Close ALL remaining open part-groups on the stack."""
+        while group_stack:
+            etree.SubElement(
+                partlist_e,
+                "part-group",
+                number="{}".format(group_stack[-1].number),
+                type="stop",
+            )
+            group_stack.pop()
+
+    def handle_parents(part):
+        """Open / close <part-group> elements to match this part's ancestry."""
+        pg = part.parent
+        to_add = []
+        while pg:
+            if pg in group_stack:
+                break
+            to_add.append(pg)
+            pg = pg.parent
+
+        # close groups until we reach the common ancestor
+        while group_stack:
+            if pg == group_stack[-1]:
+                break
+            etree.SubElement(
+                partlist_e,
+                "part-group",
+                number="{}".format(group_stack[-1].number),
+                type="stop",
+            )
+            group_stack.pop()
+
+        # open new parent groups in top-down order
+        for pg in reversed(to_add):
+            pg_e = etree.SubElement(
+                partlist_e, "part-group",
+                number="{}".format(pg.number), type="start",
+            )
+            if pg.group_symbol is not None:
+                symb_e = etree.SubElement(pg_e, "group-symbol")
+                symb_e.text = pg.group_symbol
+            if pg.group_name is not None:
+                name_e = etree.SubElement(pg_e, "group-name")
+                name_e.text = pg.group_name
+            group_stack.append(pg)
+
+    # ── Main loop ──
+    for part in score_data:
+        handle_parents(part)
+
+        # part-list entry
+        scorepart_e = etree.SubElement(partlist_e, "score-part", id=part.id)
+        partname_e = etree.SubElement(scorepart_e, "part-name")
+        if part.part_name:
+            partname_e.text = filter_string(part.part_name)
+        if part.part_abbreviation:
+            partabbrev_e = etree.SubElement(scorepart_e, "part-abbreviation")
+            partabbrev_e.text = filter_string(part.part_abbreviation)
+
+        # part element
+        part_e = etree.SubElement(root, "part", id=part.id)
+
+        renumber = 1
+        for measure in part.iter_all(pt.score.Measure):
+            mnum = measure.number
+            if mnum < measure_start or mnum > measure_end:
+                continue
+
+            part_e.append(etree.Comment(MEASURE_SEP_COMMENT))
+            attrib = {"number": str(renumber)}
+            measure_e = etree.SubElement(part_e, "measure", **attrib)
+            contents = linearize_measure_contents(
+                part, measure.start, measure.end, state
+            )
+            measure_e.extend(contents)
+            renumber += 1
+
+    close_group_stack()
+
+    with open(out, "wb") as f:
+        f.write(
+            etree.tostring(
+                root.getroottree(),
+                encoding="UTF-8",
+                xml_declaration=True,
+                pretty_print=True,
+                doctype=DOCTYPE,
+            )
+        )
+
+def note_array_to_midi(note_arr: np.ndarray, out: str, return_ppart=False) -> pt.performance.PerformedPart:
+    ppart = pt.performance.PerformedPart.from_note_array(note_arr)
+    pt.save_performance_midi(ppart, out=out)
+    if return_ppart:
+        return ppart
+
+def pnote_array_to_list(note_arr: np.ndarray):
+    onsets = note_arr["onset_sec"].reshape(-1, 1)
+    offsets = (onsets + note_arr["duration_sec"].reshape(-1, 1))
+    pitch = note_arr["pitch"].reshape(-1, 1)
+    velocity = note_arr["velocity"].reshape(-1, 1)
+    new_arr = np.concatenate([onsets, offsets, pitch, velocity], axis=1)
+    return new_arr
 
 # ==============================
 # Section 9: Tokenization utils.
@@ -1920,203 +3074,3 @@ def MusicXML_to_tokens(mxl, note_name=True) -> list[str]:
         print(f'WARNING: Piano MusicXML must have 1 or 2 parts, not {len(parts)} - using first two parts only.')
 
     return R_tokens, L_tokens
-
-# Parse MusicXML files to check for broken ties
-#path = "./data/score_examples/pred_xml/BLINOV04M_m39_beyer.musicxml"
-path = "./data/xml_score/BLINOV04M_m39.musicxml"
-
-# Algorithm to detect broken ties...
-# Uses a hashmap; memory complexity O(n), time complexity O(n)
-# tie_dict has (key: noteName, value: LinkedList of tie connections)
-
-class LinkedList:
-    def __init__(self, head):
-        self.head = head
-        self.last = head
-    
-    def append(self, node):
-        self.last.next = node
-        self.last = node
-
-class Node:
-    def __init__(self, el, next=None):
-        self.el = el
-        self.next = next
-    
-    def __str__(self):
-        return f"{self.el.nameWithOctave}"
-
-    def __repr__(self):
-        return self.__str__()
-
-def remove_broken_ties(path: str|m21.stream.Stream, output_path: str):
-    if isinstance(path, str):
-        s = m21.converter.parse(path)
-    else:
-        s = path
-
-    broken_ties = []
-    tie_dict = defaultdict(LinkedList)
-    for el in list(s.recurse()):
-        if isinstance(el, m21.note.Note) or isinstance(el, m21.chord.Chord):
-            notes = []
-            if isinstance(el, m21.chord.Chord):
-                for n in el.notes:
-                    notes.append(n)
-            else:
-                notes.append(el)
-            
-            for n in notes:
-                if n.tie is None:
-                    continue
-                tie_type = n.tie.type
-
-                if tie_type == "start":
-                    tie_dict[n.nameWithOctave] = LinkedList(Node(n))
-                
-                if tie_type == "continue":
-                    ll = tie_dict.get(n.nameWithOctave, None)
-                    if ll is None:
-                        # This is a broken tie
-                        broken_ties.append(n)
-                    else:
-                        ll.append(Node(n))
-                
-                if tie_type == "stop":
-                    ll = tie_dict.get(n.nameWithOctave, None)
-                    if ll is None:
-                        # This is a broken tie
-                        broken_ties.append(n)
-                    else:
-                        ll.append(Node(n))
-
-    # Now we have to pass the dict to add elements that have a start tie but no end tie
-    for key in tie_dict.keys():
-        ll = tie_dict[key]
-        last_node = ll.last
-        curr_node = ll.head
-        if last_node.el.tie is None:
-            continue
-        else:
-            tie_type = last_node.el.tie.type
-            if tie_type != "stop":
-                # Add all of the notes from the head node
-                # to broken ties list
-                while curr_node:
-                    broken_ties.append(curr_node.el)
-                    curr_node = curr_node.next
-                    if curr_node is None:
-                        break
-
-    for n in broken_ties:
-        n.tie = None
-
-    s.write('musicxml', fp = f"{output_path}", makeNotation=True)
-
-def merge_score(xml_path: str, store_path: str):
-    s = m21.converter.parse(xml_path)
-    rh = m21.stream.Part()
-    lh = m21.stream.Part()
-
-    # Append treble clefs and bass clefs
-    rh.insert(0, m21.clef.TrebleClef())
-    lh.insert(0, m21.clef.BassClef())
-
-    parts = list(s.parts)
-    assert len(parts) == 4, "Only four (4) parts are acceptable."
-
-    for i in range(2):
-        # i = 0 will be for rh
-        # i = 1 will be for lh
-        if i == 0:
-            voice1 = parts[i]
-            voice2 = parts[i+1]
-        else:
-            voice1 = parts[i+1]
-            voice2 = parts[i+2]
-        
-        # Now we need to merge these two voices into one voice
-        mv1 = voice1.getElementsByClass('Measure')
-        mv2 = voice2.getElementsByClass('Measure')
-        assert len(mv1) == len(mv2), "Voice measures should be equal!"
-
-        for j in range(len(mv1)-2): # skip the last two measures for now
-            # Get the jth measure for each voice
-            m1 = mv1[j]
-            m2 = mv2[j]
-            v1 = m21.stream.Voice()
-            v2 = m21.stream.Voice()
-            new_m = m21.stream.Measure(number=j+1)
-
-            if len(m1.getElementsByClass([m21.note.Note, m21.chord.Chord])) > 0:
-                for el in m1:
-                    if isinstance(el, m21.clef.Clef):
-                        continue
-                    elif isinstance(el, m21.key.KeySignature) or isinstance(el, m21.meter.TimeSignature):
-                        new_m.insert(el.offset, deepcopy(el))
-                    else:
-                        if isinstance(el, m21.note.Note):
-                            el.stemDirection = 'unspecified'
-                        
-                        if isinstance(el, m21.tempo.MetronomeMark):
-                            new = m21.tempo.MetronomeMark(numberSounding=el.number)
-                            new.style.hideObjectOnPrint = True
-                            new_m.insert(el.offset, new)
-                            continue
-                        
-                        v1.insert(el.offset, deepcopy(el))
-            
-            if len(m2.getElementsByClass([m21.note.Note, m21.chord.Chord])) > 0:
-                for el in m2:
-                    if isinstance(el, m21.clef.Clef):
-                        continue
-                    elif isinstance(el, m21.key.KeySignature) or isinstance(el, m21.meter.TimeSignature):
-                        new_m.insert(el.offset, deepcopy(el))
-                    else:
-                        if isinstance(el, m21.note.Note):
-                            el.stemDirection = 'unspecified'
-
-                        if isinstance(el, m21.tempo.MetronomeMark):
-                            new = m21.tempo.MetronomeMark(numberSounding=el.number)
-                            new.style.hideObjectOnPrint = True
-                            new_m.insert(el.offset, new)
-                            continue
-
-                        v2.insert(el.offset, deepcopy(el))
-            
-            if len(v1) > 0:
-                new_m.insert(0, v1)
-            if len(v2) > 0:
-                new_m.insert(0, v2)
-
-            if i == 0:
-                rh.append(new_m)
-            else:
-                lh.append(new_m)
-    
-    new_score = m21.stream.Score()
-    new_score.append(rh)
-    new_score.append(lh)
-    
-    assert new_score.isWellFormedNotation(), "Stream is not well-formed."
-    new_score.write("musicxml", fp=f"{store_path}", makeNotation=True)
-
-def strip_tempo_markings(xml_path: str, store_path: str):
-    # For scores we postprocess to hide the tempo, the audio
-    # should be generated from the MIDI scores for perceptual 
-    # similarity to the audio
-    s = m21.converter.parse(xml_path)
-
-    # Our goal is to use this function to do some postprocessing
-    # For now, we are looking at hiding tempo markings
-    for el in list(s.recurse().getElementsByClass(m21.tempo.MetronomeMark)):
-        # new_marking = m21.tempo.MetronomeMark(numberSounding=el.number)
-        # new_marking.style.hideObjectOnPrint = True
-
-        # Get site
-        site = el.activeSite
-        site.remove(el)
-    
-    s.metadata = m21.metadata.Metadata(title='')
-    s.metadata.composer=''
-    s.write("musicxml", fp=f"{store_path}")

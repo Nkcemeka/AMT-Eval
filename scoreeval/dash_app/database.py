@@ -17,11 +17,14 @@ from typing import Optional
 # Get the path of this file
 FILE_PATH = Path(__file__).resolve().parent
 
-USERS_PER_QUESTION = 10
-NUM_QUESTIONS = 12
+USERS_PER_QUESTION = 4
+NUM_QUESTIONS = 25
 
 with open(FILE_PATH / "assets/questions.json", "r") as f:
     questions = json.load(f)["questions"]
+
+with open(FILE_PATH / "assets/gold_msi.json", "r") as f:
+    gold_msi_quests = json.load(f)["questions"]
 
 # Instantiate base
 DB_PATH = FILE_PATH / "study.db"
@@ -39,10 +42,12 @@ class User(Base, UserMixin):
 
     # lq stands for last question when user logs out without finishing
     lq = Column(Integer, nullable=False, default=-1) 
+    finished = Column(Integer, default=0) # any number greater than 0 is 1
     responses = relationship("Response", back_populates="user")
     assigned_questions = relationship("Question", secondary="question_assignments", \
                                       back_populates="assigned_users", 
                                   order_by="QuestionAssignment.order_index")
+    gold_msi_responses = relationship("GoldMSIResponse", back_populates="user")
 
 class Question(Base):
     __tablename__ = 'questions'
@@ -78,6 +83,24 @@ class QuestionAssignment(Base):
     question_id = Column(String, ForeignKey("questions.id"), primary_key=True)
     order_index = Column(Integer, nullable=False) # added this to prevent error when logging out and back in
 
+class GoldMSIQuestion(Base):
+    __tablename__ = "gold_msi_questions"
+    id = Column(Integer, primary_key=True)
+    text = Column(String)
+    factor = Column(Integer) # 0 is perceptual and anything > 0 is musical training
+    scale_type = Column(String) # agreement or categorical
+    encoding_string = Column(String)
+    gold_msi_responses = relationship("GoldMSIResponse", back_populates="gold_msi_questions")
+
+class GoldMSIResponse(Base):
+    __tablename__ = "gold_msi_responses"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(ForeignKey("users.id"))
+    quest_id = Column(ForeignKey("gold_msi_questions.id"))
+    answer = Column(String)
+
+    user = relationship("User", back_populates="gold_msi_responses")
+    gold_msi_questions = relationship("GoldMSIQuestion", back_populates="gold_msi_responses")
 
 def trigger(engine):
     with engine.connect() as conn:
@@ -110,6 +133,35 @@ def question_to_dict(q):
         'aTrans_audio': q.aTrans_audio,
         'bTrans_audio': q.bTrans_audio
     }
+
+def load_goldmsi_quests()-> list:
+    """ 
+        This loads all the gold MSI
+        questions so the user can answer.
+
+        Args:
+            None
+        
+        Returns:
+            gq_list (list): List of gold-msi questions
+    """
+    session = SessionLocal()
+    gq_list = []
+    try:
+        gq = session.query(GoldMSIQuestion).order_by(GoldMSIQuestion.id).all()
+        for i, q in enumerate(gq):
+            temp = {
+                'text': q.text,
+                'id': q.id,
+                'factor': q.factor,
+                'scale_type': q.scale_type,
+                'encoding_string': q.encoding_string
+            }
+            gq_list.append(temp)
+        gq_list.sort(key=lambda x: x['id'])
+        return gq_list
+    finally:
+        session.close()
 
 def load_questions2(user_id: str, NUM_QUESTIONS: int=NUM_QUESTIONS):
     """ 
@@ -241,6 +293,17 @@ def load_responses(user_id: str):
     finally:
         session.close()
 
+def load_finished(user_id: str):
+    session = SessionLocal()
+    user = session.get(User, user_id)
+
+    try:
+        if user.finished:
+            return True
+        return False
+    finally:
+        session.close()
+
 def auth_func(username: str, passwd: str) -> bool:
     # Create a session
     try:
@@ -260,6 +323,41 @@ def get_user_details():
     result = session.query(User.id, User.password).all()
     session.close()
     return result
+
+def add_goldmsi_response(response_dict: dict, user_id: str):
+    # Connect to the database
+    # Create a session
+    session = SessionLocal()
+    user = session.get(User, user_id)
+
+    for key in response_dict.keys():
+        existing = session.query(GoldMSIResponse).filter_by(
+            user_id=user_id,
+            quest_id=key,
+        ).first()
+
+        if existing:
+            existing.answer = response_dict[key]
+        else:
+            session.add(GoldMSIResponse(
+                user_id=user_id,
+                quest_id=key,
+                answer=response_dict[key]
+            ))
+    
+    session.commit()
+    session.close()
+
+def check_response_msi(user_id: str) -> bool:
+    session = SessionLocal()
+    user = session.get(User, user_id)
+
+    try:
+        if user.gold_msi_responses:
+            return True
+        return False
+    finally:
+        session.close()
 
 def add_response(response_dict: dict, user_id: str):
     # Connect to the database
@@ -300,6 +398,16 @@ def add_response(response_dict: dict, user_id: str):
     
     session.commit()
     session.close()
+
+def add_finished(user_id: str):
+    session = SessionLocal()
+    user = session.get(User, user_id)
+
+    try:
+        user.finished = 1
+    finally:
+        session.commit()
+        session.close()
 
 def hash_passwd(passwd: str):
     return bcrypt.hashpw(passwd.encode(), bcrypt.gensalt())
@@ -349,6 +457,16 @@ def init_database():
         else:
             raise ValueError(f"Unknown data type: {each[type]}")
         session.add(question)
+
+    # load gold-msi questions as well
+    for each in gold_msi_quests:
+        text = each["text"]
+        factor = each["factor"]
+        scale_type = each["scale_type"]
+        encoding_string = each["encoding_string"]
+        gquest = GoldMSIQuestion(text=text, factor=factor, scale_type=scale_type, \
+                encoding_string=encoding_string)
+        session.add(gquest)
 
     session.commit()
     session.close()
