@@ -186,10 +186,23 @@ Feel free to select what you will prefer to start with if you have to choose one
 - Take your time: careful listening and evaluation are encouraged
 - If unsure, choose the option that feels **more musically reasonable or useful**
 
----
 Once again, thank you for the decision to participate. We strongly believe artificially intelligent music tools should be 
 used to augment the workflow of musicians rather than replace it. Your input directly contributes to the development of 
 human-centered music transcription systems. Thank you for taking the time to share your opinions.
+
+---
+
+## Consent to Participate
+
+Before proceeding, please read the following information carefully.
+
+By participating in this study, you acknowledge that:
+- You understand the purpose of the study, which is to evaluate automatically generated music transcriptions
+- Your responses will be **recorded and used for research purposes only**
+- No personally identifiable information will be collected
+- Data provided will be stored securely and analyzed in an anonymized form
+
+By clicking the button below, you confirm that you have read and understood this information and **consent to participate** in the study.
 """
 
 layout = html.Div(

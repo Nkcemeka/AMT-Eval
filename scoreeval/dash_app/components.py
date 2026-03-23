@@ -6,12 +6,12 @@ import dash_bootstrap_components as dbc
 # We add 2 for likert based questions
 NUM_DIM_MIDI = 5 + 2
 NUM_DIM_SCORE = 8 + 2 
-MIDI_LABELS = ['Draft', 'Faithfulness to Ref. Audio', 'Pitch', 'Rhythm', 'Harmony']
-SCORE_LABELS = ['Draft', 'Faithfulness to Ref. Audio', 'Pitch', 'Metrical Alignment', 'Note Duration',\
+MIDI_LABELS = ['Draft', 'Faithfulness to Reference Audio', 'Pitch', 'Rhythm', 'Harmony']
+SCORE_LABELS = ['Draft', 'Faithfulness to Reference Audio', 'Pitch', 'Metrical Alignment', 'Note Duration',\
                 'Voice', 'Harmony', 'Notation']
 
 TOOLTIP_TEXT_MIDI = {
-    "Faithfulness to Ref. Audio": "Overall correspondence to the reference audio, including notes, structure, phrasing, and musical detail.",
+    "Faithfulness to Reference Audio": "Overall correspondence to the reference audio, including notes, structure, phrasing, and musical detail.",
     "Draft": "Preferred starting point for further editing and refinement.",
     "Pitch": "Accuracy of the pitch content relative to the reference audio.",
     "Rhythm": "How well the rhythmic feel and timing match the reference audio.",
@@ -19,7 +19,7 @@ TOOLTIP_TEXT_MIDI = {
 }
 
 TOOLTIP_TEXT_SCORE = {
-    "Faithfulness to Ref. Audio": "Overall faithfulness to the reference audio.",
+    "Faithfulness to Reference Audio": "Overall faithfulness to the reference audio.",
     "Draft": "Preferred starting point for refinement and editing.",
     "Pitch": "Accuracy of the pitch content relative to the reference audio.",
     "Harmony": "How well the key and chord structure reflect the harmonic essence of the piece?",
@@ -31,7 +31,7 @@ TOOLTIP_TEXT_SCORE = {
 
 
 TOOLTIP_IDS = {
-    "Faithfulness to Ref. Audio": "target-overall",
+    "Faithfulness to Reference Audio": "target-overall",
     "Pitch": "target-pitch",
     "Rhythm": "target-rhythm",
     "Harmony": "target-harmony",

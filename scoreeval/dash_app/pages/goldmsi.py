@@ -71,7 +71,7 @@ def gold_msi_component(quests: list) -> list:
                         "background-color": "#003366",   # dark blue
                         "border-color": "#003366",
                         "color": "white"},
-                    size="lg"
+                    size="lg",
                 ),
             width=6  # button column takes 50% of row
         ),
@@ -130,12 +130,13 @@ layout = html.Div(
     State("dropdown_14", "value"),
     State("dropdown_15", "value"),
     State("dropdown_16", "value"),
+    State('dropdown_17', "value"),
     prevent_initial_call=True
 )
 def msi_modal_warning(_, close_modal, is_open, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, \
-    d11, d12, d13, d14, d15, d16):
+    d11, d12, d13, d14, d15, d16, d17):
     answers = [d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, \
-               d14, d15, d16]
+               d14, d15, d16, d17]
     
     if is_open:
         return False, ""
@@ -166,11 +167,12 @@ def msi_modal_warning(_, close_modal, is_open, d1, d2, d3, d4, d5, d6, d7, d8, d
     State("dropdown_14", "value"),
     State("dropdown_15", "value"),
     State("dropdown_16", "value"),
+    State("dropdown_17", "value"),
 )
 def submit_gold(n_clicks, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, \
-    d11, d12, d13, d14, d15, d16):
+    d11, d12, d13, d14, d15, d16, d17):
     answers = [d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, \
-               d14, d15, d16]
+               d14, d15, d16, d17]
     response_dict = {}
     
     for i, ans in enumerate(answers):

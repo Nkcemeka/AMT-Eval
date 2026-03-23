@@ -774,9 +774,9 @@ if __name__ == "__main__":
             subprocess.run(
                 ["python", "calc_metrics.py",
                 "-p", "./data/score_examples/",
-                "-o", "/home/nkcemeka/Documents/ismir2026/scoreeval/data/score_examples/output.xlsx",
+                "-o", "/home/nkcemeka/Do cuments/ismir2026/scoreeval/data/score_examples/output.xlsx",
                 "-m", "0"],
                 stdout=log,
                 stderr=subprocess.STDOUT
             )
-        ex.sample("data/score_examples/output.xlsx", NUM_EXAMPLES=80)
+        ex.sample("data/score_examples/output.xlsx", NUM_EXAMPLES=90)

@@ -13,15 +13,18 @@ from pathlib import Path
 import bcrypt
 from flask_login import UserMixin
 from typing import Optional
+import random
 
 # Get the path of this file
 FILE_PATH = Path(__file__).resolve().parent
 
+# Change this to 4, 25 for the final study
 USERS_PER_QUESTION = 4
 NUM_QUESTIONS = 25
 
 with open(FILE_PATH / "assets/questions.json", "r") as f:
     questions = json.load(f)["questions"]
+    random.shuffle(questions)
 
 with open(FILE_PATH / "assets/gold_msi.json", "r") as f:
     gold_msi_quests = json.load(f)["questions"]
